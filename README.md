@@ -1,2 +1,2 @@
-# oas-review
-Official OAS package: post-commit review discipline — reviewer agent, code and security review skills (oas.review)
+# oas-dev
+Official OAS package: OAS-project development policy — the oas.review discipline plus a reference workspace profile for developing OAS itself (oas.dev)
