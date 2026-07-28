@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -39,19 +39,23 @@ function parseYaml(text) {
 const pkg = readJson(ROOT, "oas-package.json");
 const profile = parseYaml(read(ROOT, "configs", "default", "oas-config.yaml"));
 
-// Resolve the closure the way `oas init --package oas.dev` does: the root's OWN
-// exported capabilities plus the capabilities of its dependency closure.
+// Resolve the closure shape the way `oas init --package oas.dev` does: the
+// root's own exported capabilities plus its immutable released dependencies.
+// The live consumer script verifies these selectors against the real catalog;
+// this standalone structural test pins the release contract without network.
 const ownCaps = pkg.capabilities.map((rel) => {
   const cap = readJson(ROOT, rel, "oas.json");
   return { id: cap.capability, layer: cap.layer || null, from: rel };
 });
+const RELEASED_DEPENDENCIES = {
+  "oas.okf@1.4.1": { package: "oas.okf", id: "oas.okf", layer: "knowledge" },
+  "oas.aweb@1.8.0": { package: "oas.aweb", id: "oas.aweb", layer: "messaging" },
+  "oas.authoring@1.0.0": { package: "oas.authoring", id: "oas.authoring", layer: null },
+};
 const depCaps = (pkg.dependencies || []).map((dep) => {
-  const dir = resolve(ROOT, dep);
-  assert.ok(existsSync(join(dir, "oas-package.json")), `dependency ${dep} must be a co-located package root`);
-  const dpkg = readJson(dir, "oas-package.json");
-  const capRel = dpkg.capabilities[0];
-  const cap = readJson(dir, capRel, "oas.json");
-  return { id: cap.capability, layer: cap.layer || null, from: dep, package: dpkg.package };
+  const cap = RELEASED_DEPENDENCIES[dep];
+  assert.ok(cap, `dependency ${dep} must be an immutable released official selector`);
+  return { ...cap, from: dep };
 });
 const supplied = new Map([...ownCaps, ...depCaps].map((c) => [c.id, c]));
 

@@ -11,7 +11,7 @@ The distribution package is `oas.dev@1.0.0`; the inner capability intentionally 
 
 `oas.dev` is for contributors and maintainers working on the OAS project. It is **not** part of OAS's default initialization profile and must never be applied implicitly.
 
-The profile recommends OAS knowledge and messaging integrations plus authoring/review policy. Its three package dependencies use the pre-publication **local package-root-relative** form pointing at each sibling repo's payload root (`../../oas-okf/oas-package`, `../../oas-aweb/oas-package`, `../../oas-authoring/oas-package`) so co-located consumer probes resolve a real closure now; the deterministic `scripts/catalog-selectors.mjs` gate replaces them with immutable official catalog selectors at publication. `oas.dev` publishes last, after OKF, aweb, and authoring. See [`SCHEMA-STATUS.md`](SCHEMA-STATUS.md).
+The profile recommends OAS knowledge and messaging integrations plus authoring/review policy. Its dependency closure is pinned to the immutable official selectors `oas.okf@1.4.1`, `oas.aweb@1.8.0`, and `oas.authoring@1.0.0`; Jira and Linear remain adopter-selected. `oas.dev` publishes last, after those dependencies. See [`SCHEMA-STATUS.md`](SCHEMA-STATUS.md).
 
 ## Set up an OAS development workspace (the profile IS the setup)
 
@@ -25,7 +25,9 @@ assembly:
 # 1. Acquire + lock oas.dev and its full closure, validate the profile against
 #    those providers, and snapshot the COMPLETE profile as the root config.
 oas init --package oas.dev --config default --dir /path/to/oas-workspace
-# (before publication: --package <path-to-oas-dev-with-siblings-co-located>)
+# Until the kernel catalog patch is installed, the equivalent explicit source is:
+# https://github.com/OAS-Framework/oas-dev.git@v1.0.0
+# with OAS_PACKAGE_CATALOG pointing at the released dependency catalog.
 
 # 2. Restore/reconcile the locked closure and nested repo scopes; host/runtime
 #    requirements (aweb `aw`; pi/claude channel) are reported for separate

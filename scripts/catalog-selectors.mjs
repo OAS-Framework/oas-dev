@@ -38,12 +38,13 @@ export const ROOT = resolve(fileURLToPath(new URL("../oas-package", import.meta.
 // sibling repo's DISTRIBUTED payload root. Jira and Linear are deliberately
 // absent — they remain adopter-selected, never oas.dev dependencies.
 export const SELECTOR_MAP = [
-  { local: "../../oas-okf/oas-package", catalog: "oas.okf" },
-  { local: "../../oas-aweb/oas-package", catalog: "oas.aweb" },
-  { local: "../../oas-authoring/oas-package", catalog: "oas.authoring" },
+  { local: "../../oas-okf/oas-package", catalog: "oas.okf", version: "1.4.1" },
+  { local: "../../oas-aweb/oas-package", catalog: "oas.aweb", version: "1.8.0" },
+  { local: "../../oas-authoring/oas-package", catalog: "oas.authoring", version: "1.0.0" },
 ];
 
 export const LOCAL_FORM = SELECTOR_MAP.map((e) => e.local);
+export const PUBLISHED_FORM = SELECTOR_MAP.map((e) => `${e.catalog}@${e.version}`);
 
 function readManifest(dir) {
   return JSON.parse(readFileSync(join(dir, "oas-package.json"), "utf8"));
@@ -51,14 +52,17 @@ function readManifest(dir) {
 
 /** Deterministic catalog selector for one entry; the version is read from the
  * co-located sibling package's own release version, making the swap exact. */
-export function catalogSelector(entry, { root = ROOT } = {}) {
+export function catalogSelector(entry, { root = ROOT, verifySibling = true } = {}) {
+  if (!/^\d+\.\d+\.\d+$/.test(entry.version)) throw new Error(`mapped ${entry.catalog} has invalid release version "${entry.version}"`);
   const siblingDir = resolve(root, entry.local);
-  const manifest = readManifest(siblingDir);
-  if (manifest.package !== entry.catalog)
-    throw new Error(`sibling at ${entry.local} declares package "${manifest.package}", expected "${entry.catalog}"`);
-  if (!/^\d+\.\d+\.\d+$/.test(String(manifest.version || "")))
-    throw new Error(`sibling ${entry.catalog} has non-release version "${manifest.version}"`);
-  return `${entry.catalog}@${manifest.version}`;
+  if (verifySibling) {
+    const manifest = readManifest(siblingDir);
+    if (manifest.package !== entry.catalog)
+      throw new Error(`sibling at ${entry.local} declares package "${manifest.package}", expected "${entry.catalog}"`);
+    if (manifest.version !== entry.version)
+      throw new Error(`sibling ${entry.catalog} is ${manifest.version}, selector map pins ${entry.version}`);
+  }
+  return `${entry.catalog}@${entry.version}`;
 }
 
 export function catalogSelectors(opts = {}) {
@@ -82,10 +86,20 @@ export function checkLocalForm({ root = ROOT } = {}) {
 
 /** Rewrite oas-package.json dependencies to the deterministic catalog form.
  * Publication-only; pre-publication CI keeps the local form. */
+export function checkPublishedForm({ root = ROOT } = {}) {
+  const deps = readManifest(root).dependencies;
+  if (!Array.isArray(deps)) throw new Error("oas-package.json has no dependencies array");
+  const same = deps.length === PUBLISHED_FORM.length && deps.every((d, i) => d === PUBLISHED_FORM[i]);
+  if (!same) throw new Error(`dependencies are not the expected published form.\n  found: ${JSON.stringify(deps)}\n  want:  ${JSON.stringify(PUBLISHED_FORM)}`);
+  return { deps, selectors: catalogSelectors({ root, verifySibling: false }) };
+}
+
 export function applyCatalogForm({ root = ROOT, write = true } = {}) {
-  const selectors = catalogSelectors({ root });
   const path = join(root, "oas-package.json");
   const manifest = JSON.parse(readFileSync(path, "utf8"));
+  const published = Array.isArray(manifest.dependencies) && manifest.dependencies.length === PUBLISHED_FORM.length
+    && manifest.dependencies.every((d, i) => d === PUBLISHED_FORM[i]);
+  const selectors = catalogSelectors({ root, verifySibling: !published });
   manifest.dependencies = selectors;
   const text = JSON.stringify(manifest, null, 2) + "\n";
   if (write) writeFileSync(path, text);
@@ -96,11 +110,17 @@ if (resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1] || "")) 
   const mode = process.argv[2] || "--check";
   try {
     if (mode === "--check") {
-      const { deps, selectors } = checkLocalForm();
-      console.log("pre-publication local form OK:", JSON.stringify(deps));
-      console.log("deterministic catalog replacement:", JSON.stringify(selectors));
+      const deps = readManifest(ROOT).dependencies;
+      if (Array.isArray(deps) && deps.every((d, i) => d === PUBLISHED_FORM[i]) && deps.length === PUBLISHED_FORM.length) {
+        const { selectors } = checkPublishedForm();
+        console.log("published catalog form OK:", JSON.stringify(selectors));
+      } else {
+        const { deps: local, selectors } = checkLocalForm();
+        console.log("pre-publication local form OK:", JSON.stringify(local));
+        console.log("deterministic catalog replacement:", JSON.stringify(selectors));
+      }
     } else if (mode === "--print") {
-      console.log(catalogSelectors().join("\n"));
+      console.log(catalogSelectors({ verifySibling: false }).join("\n"));
     } else if (mode === "--apply") {
       const { selectors } = applyCatalogForm();
       console.log("applied catalog selectors:", JSON.stringify(selectors));

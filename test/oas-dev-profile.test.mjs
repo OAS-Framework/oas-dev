@@ -4,11 +4,11 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
-  LOCAL_FORM,
+  PUBLISHED_FORM,
   SELECTOR_MAP,
   applyCatalogForm,
   catalogSelectors,
-  checkLocalForm,
+  checkPublishedForm,
 } from "../scripts/catalog-selectors.mjs";
 
 const REPO = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -39,25 +39,22 @@ test("distribution and capability identities remain independently versioned", ()
   assert.equal(capability.version, "1.2.0");
   assert.equal(pkg.configs.default.path, "configs/default/oas-config.yaml");
   assert.equal(pkg.configs.default.default, true);
-  assert.deepEqual(pkg.dependencies, ["../../oas-okf/oas-package", "../../oas-aweb/oas-package", "../../oas-authoring/oas-package"]);
+  assert.deepEqual(pkg.dependencies, ["oas.okf@1.4.1", "oas.aweb@1.8.0", "oas.authoring@1.0.0"]);
   // No literal placeholder ever ships in the manifest.
   assert.doesNotMatch(JSON.stringify(pkg.dependencies), /TODO|pin-at-publication|placeholder/i);
 });
 
-test("dependencies use the pre-publication local package-root-relative form", () => {
-  // The engine resolves relative-path dependencies between co-located local
-  // packages, so a consumer probe against local roots gets a real closure.
-  const { deps, selectors } = checkLocalForm();
-  assert.deepEqual(deps, LOCAL_FORM);
-  assert.deepEqual(deps, ["../../oas-okf/oas-package", "../../oas-aweb/oas-package", "../../oas-authoring/oas-package"]);
-  // Gate proves each local path resolves to the mapped release sibling.
-  assert.equal(selectors.length, 3);
+test("dependencies use the immutable published catalog-selector form", () => {
+  const { deps, selectors } = checkPublishedForm();
+  assert.deepEqual(deps, PUBLISHED_FORM);
+  assert.deepEqual(deps, ["oas.okf@1.4.1", "oas.aweb@1.8.0", "oas.authoring@1.0.0"]);
+  assert.deepEqual(selectors, deps);
 });
 
 test("catalog-selector replacement is deterministic (not a TODO)", () => {
   // The publication swap is fully specified by scripts/catalog-selectors.mjs:
   // each local path -> catalog id, version read from the sibling release.
-  const selectors = catalogSelectors();
+  const selectors = catalogSelectors({ verifySibling: false });
   const byId = Object.fromEntries(selectors.map((s) => [s.split("@")[0], s.split("@")[1]]));
   assert.deepEqual(Object.keys(byId).sort(), ["oas.authoring", "oas.aweb", "oas.okf"]);
   for (const s of selectors) assert.match(s, /^oas\.[a-z]+@\d+\.\d+\.\d+$/);
