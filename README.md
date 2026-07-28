@@ -11,7 +11,7 @@ The distribution package is `oas.dev@1.0.0`; the inner capability intentionally 
 
 `oas.dev` is for contributors and maintainers working on the OAS project. It is **not** part of OAS's default initialization profile and must never be applied implicitly.
 
-The profile recommends OAS knowledge and messaging integrations plus authoring/review policy. Its dependency closure is pinned to the immutable official selectors `oas.okf@1.4.1`, `oas.aweb@1.8.0`, and `oas.authoring@1.0.0`; Jira and Linear remain adopter-selected. `oas.dev` publishes last, after those dependencies. See [`SCHEMA-STATUS.md`](SCHEMA-STATUS.md).
+The profile recommends OAS knowledge and messaging integrations plus authoring/review policy. Its dependency closure is pinned to the immutable official selectors `oas.okf@v1.4.1`, `oas.aweb@v1.8.0`, and `oas.authoring@v1.0.0`; Jira and Linear remain adopter-selected. `oas.dev` publishes last, after those dependencies. See [`SCHEMA-STATUS.md`](SCHEMA-STATUS.md).
 
 ## Set up an OAS development workspace (the profile IS the setup)
 

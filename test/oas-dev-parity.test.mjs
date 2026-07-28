@@ -139,7 +139,7 @@ test("layering: the framework-workspace injection is closer (child repo), never 
 
 test("delta: released package provenance flows through oas.dev catalog selectors, not framework-bundled copies", () => {
   const pkg = JSON.parse(read("oas-package.json"));
-  assert.deepEqual(pkg.dependencies, ["oas.okf@1.4.1", "oas.aweb@1.8.0", "oas.authoring@1.0.0"]);
+  assert.deepEqual(pkg.dependencies, ["oas.okf@v1.4.1", "oas.aweb@v1.8.0", "oas.authoring@v1.0.0"]);
   // The profile resolves providers `from: installed` — i.e. from the workspace's
   // installed released closure, not framework-bundled capabilities.
   assert.match(read("configs", "default", "oas-config.yaml"), /from: installed/);

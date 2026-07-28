@@ -16,8 +16,8 @@
     }
   },
   "dependencies": [
-    "oas.okf@1.4.1",
-    "oas.aweb@1.8.0",
-    "oas.authoring@1.0.0"
+    "oas.okf@v1.4.1",
+    "oas.aweb@v1.8.0",
+    "oas.authoring@v1.0.0"
   ]
 }

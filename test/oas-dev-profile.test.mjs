@@ -39,7 +39,7 @@ test("distribution and capability identities remain independently versioned", ()
   assert.equal(capability.version, "1.2.0");
   assert.equal(pkg.configs.default.path, "configs/default/oas-config.yaml");
   assert.equal(pkg.configs.default.default, true);
-  assert.deepEqual(pkg.dependencies, ["oas.okf@1.4.1", "oas.aweb@1.8.0", "oas.authoring@1.0.0"]);
+  assert.deepEqual(pkg.dependencies, ["oas.okf@v1.4.1", "oas.aweb@v1.8.0", "oas.authoring@v1.0.0"]);
   // No literal placeholder ever ships in the manifest.
   assert.doesNotMatch(JSON.stringify(pkg.dependencies), /TODO|pin-at-publication|placeholder/i);
 });
@@ -47,7 +47,7 @@ test("distribution and capability identities remain independently versioned", ()
 test("dependencies use the immutable published catalog-selector form", () => {
   const { deps, selectors } = checkPublishedForm();
   assert.deepEqual(deps, PUBLISHED_FORM);
-  assert.deepEqual(deps, ["oas.okf@1.4.1", "oas.aweb@1.8.0", "oas.authoring@1.0.0"]);
+  assert.deepEqual(deps, ["oas.okf@v1.4.1", "oas.aweb@v1.8.0", "oas.authoring@v1.0.0"]);
   assert.deepEqual(selectors, deps);
 });
 
@@ -57,7 +57,7 @@ test("catalog-selector replacement is deterministic (not a TODO)", () => {
   const selectors = catalogSelectors({ verifySibling: false });
   const byId = Object.fromEntries(selectors.map((s) => [s.split("@")[0], s.split("@")[1]]));
   assert.deepEqual(Object.keys(byId).sort(), ["oas.authoring", "oas.aweb", "oas.okf"]);
-  for (const s of selectors) assert.match(s, /^oas\.[a-z]+@\d+\.\d+\.\d+$/);
+  for (const s of selectors) assert.match(s, /^oas\.[a-z]+@v\d+\.\d+\.\d+$/);
   // Jira/Linear are adopter-selected, never oas.dev dependencies.
   assert.deepEqual(SELECTOR_MAP.map((e) => e.catalog).sort(), ["oas.authoring", "oas.aweb", "oas.okf"]);
   // Applying the gate (dry run) yields exactly those catalog selectors and drops

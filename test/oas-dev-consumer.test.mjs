@@ -48,9 +48,9 @@ const ownCaps = pkg.capabilities.map((rel) => {
   return { id: cap.capability, layer: cap.layer || null, from: rel };
 });
 const RELEASED_DEPENDENCIES = {
-  "oas.okf@1.4.1": { package: "oas.okf", id: "oas.okf", layer: "knowledge" },
-  "oas.aweb@1.8.0": { package: "oas.aweb", id: "oas.aweb", layer: "messaging" },
-  "oas.authoring@1.0.0": { package: "oas.authoring", id: "oas.authoring", layer: null },
+  "oas.okf@v1.4.1": { package: "oas.okf", id: "oas.okf", layer: "knowledge" },
+  "oas.aweb@v1.8.0": { package: "oas.aweb", id: "oas.aweb", layer: "messaging" },
+  "oas.authoring@v1.0.0": { package: "oas.authoring", id: "oas.authoring", layer: null },
 };
 const depCaps = (pkg.dependencies || []).map((dep) => {
   const cap = RELEASED_DEPENDENCIES[dep];

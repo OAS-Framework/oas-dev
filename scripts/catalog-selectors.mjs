@@ -44,7 +44,7 @@ export const SELECTOR_MAP = [
 ];
 
 export const LOCAL_FORM = SELECTOR_MAP.map((e) => e.local);
-export const PUBLISHED_FORM = SELECTOR_MAP.map((e) => `${e.catalog}@${e.version}`);
+export const PUBLISHED_FORM = SELECTOR_MAP.map((e) => `${e.catalog}@v${e.version}`);
 
 function readManifest(dir) {
   return JSON.parse(readFileSync(join(dir, "oas-package.json"), "utf8"));
@@ -62,7 +62,7 @@ export function catalogSelector(entry, { root = ROOT, verifySibling = true } = {
     if (manifest.version !== entry.version)
       throw new Error(`sibling ${entry.catalog} is ${manifest.version}, selector map pins ${entry.version}`);
   }
-  return `${entry.catalog}@${entry.version}`;
+  return `${entry.catalog}@v${entry.version}`;
 }
 
 export function catalogSelectors(opts = {}) {
