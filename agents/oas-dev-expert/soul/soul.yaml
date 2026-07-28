@@ -1,0 +1,8 @@
+name: oas-dev-expert
+kind: persistent
+description: Owner of the official oas.dev package: OAS development profile, review discipline, implementation, releases, and support
+type: package-maintainers
+repo: /Users/pepe-reyero/oas-workspace/oas-dev
+work: worktree
+runtime: claude
+model: opus
