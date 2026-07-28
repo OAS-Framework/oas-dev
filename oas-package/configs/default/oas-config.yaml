@@ -1,0 +1,60 @@
+# oas.dev default profile — portable OAS development team policy (team name
+# oas-framework — the established OAS development team identity, unchanged).
+#
+# Adopted as an EDITABLE snapshot at a non-Git development workspace root. The
+# non-Git workspace changes the filesystem/config scope, NOT the team identity.
+# Its resolved behavior inside the child `oas/` framework repo mirrors the
+# framework repo's historical oas-config.yaml for the framework-authors and
+# developers families, plus the approved package-maintainers extensions. It
+# carries NO provider team id, account, host path, or other deployment-local
+# machine state — the operator fills those into the local snapshot only. See
+# PARITY.md for the exact legacy->adopted mapping and every intentional delta.
+name: oas-framework
+
+# ── Team — the deployment boundary. Portable: name only (the established
+# oas-framework team); the operator adds the resolved team id and any auth to
+# the local snapshot, never to this package.
+team:
+  name: oas-framework
+
+agent-types:
+  framework-authors:
+    description: Agents that author and steward the OAS framework itself
+  developers:
+    description: OAS developers — worktree-mode, PR-only to main, post-commit review discipline
+  package-maintainers:
+    description: Experts that own an official OAS package's vision, implementation, maintenance, releases, and support.
+
+capabilities:
+  # Fundamental layers — exclusive slots; a capability entry or an explicit none.
+  layers:
+    knowledge:
+      capability: oas.okf
+      from: installed
+    # Messaging is EXPLICIT here (the framework repo historically inherited aweb
+    # from the laptop's outer config; a portable root must declare it itself).
+    messaging:
+      capability: oas.aweb
+      from: installed
+    tasks: none
+  additive:
+    oas.authoring:
+      from: installed
+      agent-types:
+        framework-authors: true
+        package-maintainers: true
+    oas.review:
+      from: installed
+      agent-types:
+        developers: true
+        package-maintainers: true
+
+# ── Work modes — preserve the framework's worktree policy (optional per-mode
+# env bootstrap; `setup:` runs inside each NEW worktree after `git worktree add`).
+work-modes:
+  worktree:
+    # setup: scripts/setup-worktree.sh
+
+# ── OAS defaults — the baseline instruction block (default OAS policy).
+oas:
+  # injection-override: .agents/injections/oas-defaults/oas.md

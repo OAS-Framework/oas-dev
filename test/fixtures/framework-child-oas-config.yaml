@@ -1,0 +1,15 @@
+# Child override committed IN the oas/ framework repository after migration.
+#
+# It carries ONLY the framework-repository-specific behavior that must not reach
+# sibling package experts: the framework-workspace instruction injection (a
+# repo-relative path that resolves inside oas/, and would mis-resolve/mis-target
+# from a non-Git root). All common team policy — families, OKF knowledge, aweb
+# messaging, tasks none, authoring→framework-authors, review→developers,
+# worktree mode, default OAS policy — is inherited from the adopted root
+# oas.dev profile. The operator adds the resolved team id and any auth to the
+# local snapshot only, never here.
+name: oas-framework
+
+# Extra unconditional instruction block for every instance operating inside oas/.
+agents-md-injection:
+  framework: injects/framework-workspace.md

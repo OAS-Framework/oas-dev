@@ -1,0 +1,6 @@
+name: reviewer
+kind: capability
+work: attached
+runtime: pi
+model: github-copilot/gpt-5.6-sol:high, openai/gpt-5.6-sol:high
+description: Fresh-eyes post-commit reviewer — reviews one commit's diff with the code-review and security-review skills, reports the verdict to its spawner over the deployment's messaging layer (or in its transcript when there is none), and retires. Ephemeral — no memory, no state tracking.

@@ -1,0 +1,23 @@
+{
+  "package": "oas.dev",
+  "version": "1.0.0",
+  "description": "OAS-project development policy: the oas.review discipline plus a reference workspace profile for developing OAS itself.",
+  "compatibility": {
+    "oas": ">=0.19.0"
+  },
+  "capabilities": [
+    "capabilities/oas-review"
+  ],
+  "configs": {
+    "default": {
+      "path": "configs/default/oas-config.yaml",
+      "description": "OAS development workspace root",
+      "default": true
+    }
+  },
+  "dependencies": [
+    "oas.okf@1.4.1",
+    "oas.aweb@1.8.0",
+    "oas.authoring@1.0.0"
+  ]
+}

@@ -1,0 +1,44 @@
+# LEGACY behavioral baseline: the OAS framework repo's historical
+# oas-config.yaml, as the parity reference. Sanitized for packaging — the
+# resolved team id (deployment-local machine state) is intentionally omitted;
+# messaging historically resolved from the laptop's OUTER config and is not
+# declared here. PARITY.md documents these as approved deltas. Do not treat this
+# file as shipped policy; it exists only so the parity test can prove the
+# adopted-root + child-repo resolution reproduces this behavior for the
+# framework-authors and developers families.
+name: oas-framework
+team:
+  name: oas-framework
+  # id: <deployment-local — omitted from the package>
+
+agent-types:
+  framework-authors:
+    description: Agents that author and steward the OAS framework itself
+  developers:
+    description: OAS developers — worktree-mode, PR-only to main, post-commit review discipline
+
+capabilities:
+  layers:
+    knowledge:
+      capability: oas.okf
+      from: installed
+    tasks: none
+  additive:
+    oas.authoring:
+      from: installed
+      agent-types:
+        framework-authors: true
+    oas.review:
+      from: installed
+      agent-types:
+        developers: true
+
+work-modes:
+  worktree:
+    # setup: scripts/setup-worktree.sh
+
+oas:
+  # injection-override: .agents/injections/oas-defaults/oas.md
+
+agents-md-injection:
+  framework: injects/framework-workspace.md

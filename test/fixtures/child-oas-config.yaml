@@ -1,0 +1,16 @@
+name: child-repository-override
+capabilities:
+  layers:
+    knowledge: none
+    messaging: none
+  additive:
+    oas.authoring:
+      from: installed
+      agent-types:
+        framework-authors: false
+        package-maintainers: false
+    oas.review:
+      from: installed
+      agent-types:
+        developers: false
+        package-maintainers: false
