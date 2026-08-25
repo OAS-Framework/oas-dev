@@ -188,6 +188,34 @@ test("CREDENTIAL_KEY accepts settings that MEASURE or SWITCH credentials", () =>
   }
 });
 
+test("a measurement HEAD exempts the budget noun only, never every credential noun", () => {
+  // The over-exemption this closes. The head guard was applied to every noun in
+  // the list, so a whole family of plainly-secret keys shipped: a head word was
+  // taken to mean "this key is ABOUT credentials" whatever noun followed it.
+  //
+  // The head list is model-budget vocabulary, and that vocabulary COUNTS, so it
+  // is plural without exception. `input_secret` is a secret that comes in;
+  // `output_token` is a token that goes out; `max_password` is nothing at all.
+  for (const key of [
+    "input_secret", "output_token", "total_secret", "max_password",
+    "min_credentials", "prompt_api_key", "num_passwd", "cached_secret",
+    "completion-token", "average_password", "estimated_credentials",
+    // The singular/plural line, stated as a fixture rather than left implicit.
+    "output_token", "max_token",
+  ]) {
+    assert.ok(CREDENTIAL_KEY.test(key), `MUST be flagged: ${key}`);
+  }
+  // The other direction, immediately beside it: the budget vocabulary the head
+  // list exists for is untouched, and it is untouched for EVERY head.
+  for (const key of [
+    "max_tokens", "min_tokens", "total_tokens", "input_tokens", "output_tokens",
+    "prompt_tokens", "completion_tokens", "cached_tokens", "estimated_tokens",
+    "average_tokens", "avg_tokens", "num_tokens", "number_tokens",
+  ]) {
+    assert.equal(CREDENTIAL_KEY.test(key), false, `MUST NOT be flagged: ${key}`);
+  }
+});
+
 test("CREDENTIAL_ASSIGNMENT matches an assignment, not the WORD", () => {
   for (const text of [
     "api_key: sk-live-leaked", "--api-key=sk-live-leaked", "token=abc123",
@@ -215,6 +243,12 @@ test("CREDENTIAL_ASSIGNMENT matches an assignment, not the WORD", () => {
   // so a noun that merely ends in one is untouched.
   assert.ok(CREDENTIAL_ASSIGNMENT.test("climax tokens: sk-live-leaked"),
     "only a standalone measurement word may exempt an assignment");
+  // …and it may exempt only the budget noun. `--max-password=hunter2` was
+  // accepted while `# max tokens: 4096` was the thing the guard existed for.
+  for (const text of ["--max-password=hunter2", "# total secret: shh", "# output token = sk-live"]) {
+    assert.ok(CREDENTIAL_ASSIGNMENT.test(text),
+      `a measurement head must not exempt a non-budget noun: ${text}`);
+  }
 });
 
 test("valueLeaks finds a credential key at any depth, and leaves portable settings alone", () => {

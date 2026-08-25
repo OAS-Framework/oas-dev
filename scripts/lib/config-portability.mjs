@@ -50,7 +50,12 @@ const HOST_ENV = /\$\{?(HOME|USER|PWD)\b|%(USERPROFILE|HOMEPATH|USERNAME)%/i;
  * the unix spelling `passwd` is at least as likely in a settings key as
  * `password`, and an adversarial fixture found it missing. A deny heuristic
  * that only covers the long form is the one that ships a secret. */
-const CREDENTIAL_NOUN = "tokens?|secrets?|passw[or]{0,2}ds?|api[_-]?keys?|credentials?";
+const BUDGET_NOUN = "tokens";
+const CREDENTIAL_NOUN = `${BUDGET_NOUN}|token|secrets?|passw[or]{0,2}ds?|api[_-]?keys?|credentials?`;
+/** Every noun EXCEPT the plural `tokens`, which is the only one a head
+ * qualifier may exempt — see NON_SECRET_HEAD below. The singular `token` stays
+ * here, so `output_token` is flagged while `output_tokens` is not. */
+const UNQUALIFIABLE_NOUN = "token|secrets?|passw[or]{0,2}ds?|api[_-]?keys?|credentials?";
 
 /**
  * QUALIFIERS THAT MAKE A CREDENTIAL NOUN A MEASUREMENT OR A SWITCH.
@@ -61,13 +66,34 @@ const CREDENTIAL_NOUN = "tokens?|secrets?|passw[or]{0,2}ds?|api[_-]?keys?|creden
  * template that legitimately configures any of them could not be shipped —
  * which is how a portability gate teaches people to work around it.
  *
- * So the noun is read in context. A word from HEAD immediately before it, or
- * from TAIL immediately after it, means the key names something ABOUT
- * credentials rather than a credential, and the key is accepted. Both lists are
- * closed and short on purpose: every entry is a word that cannot plausibly
- * introduce or terminate a secret VALUE. `token_value`, `secret_key`,
+ * So the noun is read in context, by two guards with DIFFERENT reach. Stating
+ * that difference exactly is the point of this comment: an earlier version said
+ * a head word "means the key names something ABOUT credentials rather than a
+ * credential", full stop, and the code applied it to every noun — so
+ * `input_secret`, `output_token`, `total_secret` and `max_password` were all
+ * silently accepted. A deny heuristic that exempts `input_secret` is not a deny
+ * heuristic.
+ *
+ * TAIL — applies to EVERY noun. A trailing qualifier describes what is done
+ * with credentials: `token_limit`, `secret_scanning`, `password_policy`,
+ * `api_key_rotation`, `credentials_required`. The word sits AFTER the noun, so
+ * it cannot be part of a secret's own name, and the reading is the same
+ * whichever noun precedes it.
+ *
+ * HEAD — applies to the PLURAL `tokens` and to nothing else. The head list is
+ * model-budget vocabulary, and that vocabulary counts things, so it is plural
+ * without exception: `max_tokens`, `input_tokens`, `output_tokens`,
+ * `prompt_tokens`, `completion_tokens`, `cached_tokens`, `total_tokens`,
+ * `num_tokens`. There is no corresponding reading for any other noun — an
+ * `input_secret` is a secret that comes in, an `output_token` is a token that
+ * goes out, and a `max_password` is nothing at all. Restricting the head to the
+ * one noun it was justified by is the narrowest rule that keeps the budget
+ * vocabulary shippable, and it is why the singular `output_token` is flagged
+ * while the plural `output_tokens` is not.
+ *
+ * Both lists are closed and short on purpose. `token_value`, `secret_key`,
  * `api_key_2` and every bare spelling stay flagged, because none of them
- * matches.
+ * matches either guard.
  */
 const NON_SECRET_HEAD = "max|min|total|input|output|prompt|completion|cached|estimated|average|avg|num|number";
 const NON_SECRET_TAIL = "budgets?|limits?|counts?|usage|polic(?:y|ies)|scanning|scanner|rotation|ttl|expiry|required|enabled|disabled";
@@ -76,11 +102,19 @@ const NON_SECRET_TAIL = "budgets?|limits?|counts?|usage|polic(?:y|ies)|scanning|
  * A key that names a secret VALUE. Boundaries are lookarounds rather than
  * consumed separators so the head/tail guards can inspect what sits either side
  * of the noun without the match position moving.
+ *
+ * The head guard sits INSIDE the alternation, on the budget branch alone, so
+ * `max_tokens` is exempt and `max_password` is not. The singular `token` lives
+ * in the other branch and carries no head exemption; on `max_tokens` that
+ * branch matches the first five characters and then dies on the trailing
+ * word-boundary lookahead, which is what keeps the plural exempt.
  */
 export const CREDENTIAL_KEY = new RegExp(
   "(?<=^|[_-])" +                                        // key-word boundary before
-  `(?<!(?:^|[_-])(?:${NON_SECRET_HEAD})[_-])` +          // …not `max_`, `input_`, …
-  `(?:${CREDENTIAL_NOUN})` +
+  "(?:" +
+    `(?<!(?:^|[_-])(?:${NON_SECRET_HEAD})[_-])${BUDGET_NOUN}` +   // `max_tokens` exempt
+    `|(?:${UNQUALIFIABLE_NOUN})` +                        // every other noun: no head exemption
+  ")" +
   "(?=$|[_-])" +                                         // key-word boundary after
   `(?![_-](?:${NON_SECRET_TAIL})(?:$|[_-]))`,            // …not `_limit`, `_scanning`, …
   "i",
@@ -91,14 +125,19 @@ export const CREDENTIAL_KEY = new RegExp(
  * an argument string and one sitting in a comment, and a template's comments are
  * copied to the adopter as faithfully as its values.
  *
- * The same head guard applies, widened to a SPACE separator because this rule
- * reads prose: `# max tokens: 4096` is a documented setting, not a leaked one.
+ * The same head guard applies — and the same restriction to the plural `tokens`
+ * — widened to a SPACE separator because this rule reads prose: `# max tokens:
+ * 4096` is a documented setting, not a leaked one, while `--max-password=hunter2`
+ * is a leaked one and used to be exempt for exactly the reason corrected above.
  * No tail guard is needed — the assignment operator has to follow the noun
  * immediately, so `token budget: 500` never matched in the first place. */
 export const CREDENTIAL_ASSIGNMENT = new RegExp(
   "(?:^|[^\\w])-{0,2}" +
-  `(?<!(?:^|[^A-Za-z0-9])(?:${NON_SECRET_HEAD})[\\s_-])` +
-  `(?:${CREDENTIAL_NOUN})\\s*[:=]`,
+  "(?:" +
+    `(?<!(?:^|[^A-Za-z0-9])(?:${NON_SECRET_HEAD})[\\s_-])${BUDGET_NOUN}` +
+    `|(?:${UNQUALIFIABLE_NOUN})` +
+  ")" +
+  "\\s*[:=]",
   "i",
 );
 
