@@ -92,8 +92,11 @@ for the closure.
 
 **And the catalog is not optional either.** It is overridable only through the
 `OAS_PACKAGE_CATALOG` environment variable, and an override **REPLACES** the
-bundled catalog outright — there is no merge, and a missing or unreadable file
-reads as an *empty* catalog. That is a whole-closure concern, not just a matter
+bundled catalog outright — there is no merge. A **missing** file reads as an
+*empty* catalog, silently. A file that exists but cannot be read or parsed does
+**not**: the kernel raises `invalid-source: broken package catalog <file>:
+<reason>` and the command fails loudly, so a typo'd path degrades quietly while a
+corrupt one does not. That is a whole-closure concern, not just a matter
 of how you spell `oas.dev`: this package's three dependencies
 (`oas.okf@v2.0.0`, `oas.aweb@v2.0.0`, `oas.authoring@v2.0.0`) are **catalog
 selectors**, and the kernel resolves each of them through whatever catalog is in

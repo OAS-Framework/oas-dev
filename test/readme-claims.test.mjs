@@ -125,8 +125,27 @@ test("the catalog paragraph states REPLACE semantics and names the dependency en
   assert.match(spellings, /REPLACES?\b/,
     "an OAS_PACKAGE_CATALOG override replaces the bundled catalog; it does not merge with it");
   assert.match(spellings, /no merge|there is no merge/i);
-  assert.match(spellings, /empty\W*catalog/,
-    "a missing or unreadable override file reads as an EMPTY catalog");
+
+  // A MISSING file reads as empty; an unreadable one does NOT.
+  //
+  // The released kernel's readCatalogFile returns the empty catalog only on
+  // `!existsSync(file)`. Everything after that — an EACCES from readFileSync, a
+  // JSON syntax error, a non-object root — is raised as
+  // `invalid-source: broken package catalog <file>: <reason>` and is never
+  // caught, so the command dies. The README used to lump the two together as
+  // "a missing or unreadable file reads as an empty catalog", which told a
+  // reader with a corrupt catalog to go looking for a resolution failure that
+  // will never happen.
+  assert.match(spellings, /missing\b[^.]*\bempty/i,
+    "the README must say that a MISSING override file reads as an empty catalog");
+  assert.doesNotMatch(spellings, /missing or unreadable|unreadable file reads as/i,
+    "an unreadable-but-present catalog does NOT read as empty — the kernel throws invalid-source");
+  assert.match(spellings, /invalid-source/,
+    "the README must name the error code an existing-but-unparseable catalog produces");
+  assert.match(spellings, /broken package catalog/,
+    "…and the kernel's own message, so a reader can match it against their terminal");
+  assert.match(spellings, /cannot be read or parsed|unparseable|corrupt/i,
+    "the README must say WHICH condition raises it, not just that some do");
   // The closure consequence: the three dependencies are catalog selectors, so an
   // overriding catalog must carry them too. The Git spellings pin the ROOT
   // package's source and cannot supply a dependency.
