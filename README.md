@@ -61,13 +61,19 @@ development policy. Every preserved behavior and every intentional delta
 (deployment-specific team id/credentials/paths, the rename, explicit messaging,
 the maintainer family, released provenance) is documented in [`PARITY.md`](PARITY.md).
 
-The end-to-end non-Git consumer acceptance test
-(`scripts/consumer-acceptance.mjs`) exercises the whole sequence against a
-published OAS ≥ 0.19.0 kernel — `oas init --package` → v2 lock graph → adopted
-complete root config → bare `oas install` → expected providers/targets via
-`oas doctor` → nested `oas/` override → cutover check — and fails closed
-(release-pending) below the floor. Its kernel-free structural half
-(`test/oas-dev-consumer.test.mjs`) runs today.
+The end-to-end consumer probe (`npm run probe` →
+`scripts/consumer-probe.mjs`) drives the PUBLISHED OAS kernel at this package's
+declared floor against a synthetic catalog that pins all five official leaf
+packages at their immutable v2 tag commits and serves them from local bare
+clones, so the whole sequence runs offline and hermetically: the
+dependency-closure proof in both directions (installing `oas.dev` locks exactly
+`oas.dev` + `oas.okf` + `oas.aweb` + `oas.authoring`, with `oas.jira` and
+`oas.linear` absent, while `oas.jira` installs cleanly from that same catalog)
+→ pinned-Git acquisition at the default package root → `oas init --package`
+adopting the template byte for byte → exact restore → trust → agent-type
+resolution and the nested `oas/` override → scaffold-only spawn and retire →
+the v1-lock cutover refusal. Its kernel-free structural half
+(`test/oas-dev-consumer.test.mjs`) runs in `npm test`.
 
 ## Acquire or activate review independently
 

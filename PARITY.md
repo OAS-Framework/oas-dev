@@ -12,7 +12,7 @@ snapshots it whole as the root `oas-config.yaml`; a bare `oas install` then
 reconciles. There is no manual post-adoption assembly. A closer child-repo
 config exists only for truly repo-specific policy (the framework injection),
 never to reconstruct common OAS development policy. The end-to-end sequence is
-exercised by `scripts/consumer-acceptance.mjs` (live, released kernel) and
+exercised by `scripts/consumer-probe.mjs` (live, released kernel) and
 `test/oas-dev-consumer.test.mjs` (structural, today).
 
 Parity is proven mechanically by `test/oas-dev-parity.test.mjs`, which resolves
