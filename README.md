@@ -239,20 +239,30 @@ npm run probe
 
 `npm test` is a gate *and* the runner: it rebuilds the canonical `scripts` block,
 refuses anything else, then runs manifest validation and exactly the suites under
-`test/` as argv — never through a shell, never by bare discovery. It is offline,
+`test/` as argv — never through a shell, never by bare discovery. It also refuses
+to run when a file `node --test` *would* discover sits outside that inventory (a
+`.test.js`, a suite outside `test/`, a symlinked suite directory), because a
+suite that silently never executes is worse than a failing one. It is offline,
 and it covers both manifests against the vendored 0.20 schemas
-([`SCHEMA-STATUS.md`](SCHEMA-STATUS.md)), resource containment, template
-portability, the reviewer contract, the exact family-to-capability matrix, the
-child-repository override fixture, the structural half of the consumer contract
-(`test/oas-dev-consumer.test.mjs`), and the install spellings documented above.
+([`SCHEMA-STATUS.md`](SCHEMA-STATUS.md)) — whose absence is now fatal rather than
+a skipped rule — resource containment, template portability, the reviewer
+contract, the exact family-to-capability matrix, the child-repository override
+fixture, the structural half of the consumer contract
+(`test/oas-dev-consumer.test.mjs`), the install spellings documented above, and
+this file's checkable claims about trust, the catalog and the version jump
+(`test/readme-claims.test.mjs`).
 
 `npm run probe` drives the **published** `@oas-framework/oas` kernel at this
 package's declared floor — the v0.20.0 *tag tree* self-reports 0.19.4, so only
 the npm release will do — inside a throwaway sandbox with a synthetic `HOME`, a
 PATH of refusing stubs, and a synthetic catalog that pins all five official leaf
 packages at their immutable v2 tag commits, served from local bare clones. It
-proves the closure in both directions, pinned-Git acquisition at the default
-package root, `oas init --package` adopting the template byte for byte, exact
-restore, the hook-less trust outcome, agent-type resolution and the nested `oas/`
-override, scaffold-only spawn and retire, and the v1-lock cutover refusal. It
-needs the npm registry, so CI runs it as its own job.
+proves the closure in both directions, that the generated lock satisfies the
+vendored lock schema, pinned-Git acquisition at the default package root,
+`oas init --package` adopting the template byte for byte, exact restore, the
+hook-less trust outcome for `oas.review` beside the two dependencies that *do*
+need approval, agent-type resolution and the nested `oas/` override,
+scaffold-only spawn and retire, and the v1-lock cutover refusal. It also holds
+this file to what it observed: the kernel messages quoted above must match
+character for character, and the trust posture must name every capability the
+run had to approve. It needs the npm registry, so CI runs it as its own job.

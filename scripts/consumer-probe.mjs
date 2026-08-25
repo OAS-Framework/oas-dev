@@ -51,8 +51,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { portabilityLeaks } from "./lib/config-portability.mjs";
+import { schemaProblems, unsupportedKeywords } from "./lib/json-schema.mjs";
 import {
-  RELEASE_TAG, acceptedSpellings, installSourceProblems, installSources, pinnedRef, refusedSpellings,
+  RELEASE_TAG, acceptedSpellings, installSourceProblems, installSources, pinnedRef,
+  quotedKernelMessages, refusedSpellings,
 } from "./lib/readme-install-sources.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -555,6 +557,36 @@ check("every spelling the README documents as REFUSED is refused, with invalid-s
   return rows.join("; ");
 });
 
+check("the kernel messages the README QUOTES are the kernel's own, character for character", () => {
+  // A paraphrase reads as documentation and is a lie about a program's output:
+  // the previous README quoted "git shorthand must be git:host/org/repo[@ref][#path]",
+  // dropping the angle brackets the kernel actually prints and the offending
+  // spec it echoes back — so a reader matching the message against their
+  // terminal would conclude they were seeing a different error.
+  //
+  // Only the kernel knows its own text, so this is the half of the check that
+  // cannot live offline. The offline suite enforces that every refusal CARRIES
+  // a quote; this one enforces what the quote says.
+  const quoted = quotedKernelMessages(README_TEXT);
+  const refused = refusedSpellings(README_TEXT);
+  equal(quoted.length, refused.length, "each refused spelling must carry exactly one verbatim quote");
+  const rows = [];
+  for (const { spec, error } of parseSources(refused.map((r) => r.spelling))) {
+    const match = quoted.find(({ message }) => message === error.message);
+    assert(match, `README does not quote the kernel's message for ${JSON.stringify(spec)} verbatim.\n` +
+      `  kernel:  ${JSON.stringify(error.message)}\n` +
+      `  README:  ${quoted.map((q) => `README:${q.line} ${JSON.stringify(q.message)}`).join("\n           ")}`);
+    rows.push(`README:${match.line} ✓`);
+  }
+  // And nothing is quoted that no spelling produces — a stale quote left behind
+  // by an edit is the same defect pointing the other way.
+  const kernelMessages = new Set(parseSources(refused.map((r) => r.spelling)).map((r) => r.error.message));
+  for (const { message, line } of quoted) {
+    assert(kernelMessages.has(message), `README:${line} quotes ${JSON.stringify(message)}, which no documented spelling produces`);
+  }
+  return rows.join(" ");
+});
+
 check(`the released ${KERNEL_VERSION} bundled catalog still names oas.dev v1.0.0 — why the README pins a selector`, () => {
   // The README's central install claim is that `oas.dev` alone installs v1 and
   // only `oas.dev@v2.0.0` installs this release. That is a fact about THIS
@@ -673,6 +705,44 @@ check("the lock records EXACTLY the four exported capabilities, each with a dedi
     equal(row.trusted, false, `${id} must not be trusted by acquisition`);
   }
   return Object.entries(lock.capabilities).map(([id, r]) => `${id}←${r.package}`).join(" ");
+});
+
+check("the REAL generated lock validates against the vendored oas-lock schema", () => {
+  // The lock schema was vendored and hashed for provenance but nothing ever
+  // APPLIED it, so it was decorative: `schemas/oas-lock.schema.json` could have
+  // described any shape at all and every gate would still have been green.
+  //
+  // Here it gates the actual document the released kernel just wrote for the
+  // four-package closure — which is the only lock in this repository that was
+  // not built by a test to match its own expectations.
+  const schema = readJson(join(REPO, "schemas", "oas-lock.schema.json"));
+  // A keyword the shared evaluator does not implement is silently ignored, so a
+  // schema that grew one would validate LESS than it appears to. Checked first,
+  // because everything below inherits that assumption.
+  deepEqual(unsupportedKeywords(schema), [],
+    "the vendored lock schema uses a keyword scripts/lib/json-schema.mjs does not implement — it would be silently skipped, weakening this check without changing its output");
+
+  const lock = lockOf(profile);
+  const problems = schemaProblems(lock, schema, "oas-lock.json");
+  assert(!problems.length, `the generated lock violates the vendored schema:\n  - ${problems.join("\n  - ")}`);
+
+  // NON-VACUITY, three ways. A validator that accepts everything would pass the
+  // assertion above just as happily, and each of these is a real corruption the
+  // 0.20 lock contract exists to refuse.
+  const seeded = [
+    ["a malformed payload integrity", (l) => { l.packages["oas.dev"].integrity = "sha256-not-a-digest"; }],
+    ["the unsupported transitional package-root shape", (l) => { l.packages["oas.dev"].capabilities = ["oas.review"]; }],
+    ["a capability root spelled as a traversal", (l) => { l.capabilities["oas.review"].path = "../escape"; }],
+    ["a missing required capability field", (l) => { delete l.capabilities["oas.review"].trusted; }],
+    ["a lockfileVersion the contract does not define", (l) => { l.lockfileVersion = 3; }],
+  ];
+  for (const [label, corrupt] of seeded) {
+    const copy = JSON.parse(JSON.stringify(lock));
+    corrupt(copy);
+    assert(schemaProblems(copy, schema, "oas-lock.json").length,
+      `the vendored lock schema failed to catch ${label} — it is not gating anything`);
+  }
+  return `lockfileVersion ${lock.lockfileVersion}, ${Object.keys(lock.packages).length} packages, ${Object.keys(lock.capabilities).length} capabilities; ${seeded.length} seeded corruptions all caught`;
 });
 
 check(`the closure EXCLUDES ${NON_DEPENDENCIES.join(" and ")} from both lock maps`, () => {
@@ -900,6 +970,7 @@ check("oas.review declares NO executable surface, and trust says exactly that", 
   return "approved [], skipped [oas.review], surface {commands:[],hooks:[]}, lock.trusted stays false";
 });
 
+const executableSurfaces = {};
 check("the executable dependencies ARE gated, and `oas trust` binds each to its artifact", () => {
   // Non-vacuity for the check above: in the same lock, two capabilities DO have
   // executable surfaces, and their approvals behave completely differently.
@@ -912,8 +983,42 @@ check("the executable dependencies ARE gated, and `oas trust` binds each to its 
     equal(trust.result.approvedIntegrity[id], integrity, `${id} approval must bind to the MATERIALIZED artifact integrity`);
     assert(trust.result.executableSurface[id].hooks.includes("spawn"), `${id} declares a spawn hook`);
     equal(lockOf(profile).capabilities[id].trusted, true, `${id} trust is recorded in the lock`);
+    executableSurfaces[id] = trust.result.executableSurface[id];
   }
+  // oas.okf's surface is the one a reader is most likely to assume the package
+  // covers, because the OKF protocol's own harvest step runs through it.
+  assert(executableSurfaces["oas.okf"].commands.includes("harvest"),
+    `oas.okf must expose the harvest command: ${JSON.stringify(executableSurfaces["oas.okf"])}`);
   return "oas.okf and oas.aweb approved at their artifact integrity; oas.review needed no approval";
+});
+
+check("the README's trust posture names EVERY capability this run had to trust", () => {
+  // The blocker this closes: the README said "there is nothing to trust", which
+  // was true of oas.review and false of the workspace — while THIS probe was
+  // already trusting two capabilities, one line above, and saying nothing about
+  // the contradiction. The document is now checked against what the run
+  // observed rather than against a reviewer's memory.
+  const section = (heading) => {
+    const lines = README_TEXT.split("\n");
+    const start = lines.findIndex((line) => line.trim() === heading);
+    assert(start !== -1, `README has no ${JSON.stringify(heading)} section`);
+    const out = [];
+    for (let i = start + 1; i < lines.length && !/^#{1,2} /.test(lines[i]); i += 1) out.push(lines[i]);
+    return out.join("\n");
+  };
+  const trust = section("## Acquire or activate review independently");
+  const gated = Object.entries(executableSurfaces)
+    .filter(([, surface]) => surface.commands.length || surface.hooks.length)
+    .map(([id]) => id);
+  assert(gated.length >= 2, `this check is only meaningful if the run gated something: ${JSON.stringify(executableSurfaces)}`);
+  for (const id of gated) {
+    assert(trust.includes(`oas trust ${id}`),
+      `the README's trust posture never tells a reader to run \`oas trust ${id}\`, but this run had to: ` +
+      `${id} declares commands ${JSON.stringify(executableSurfaces[id].commands)} and hooks ${JSON.stringify(executableSurfaces[id].hooks)}`);
+  }
+  // …and it must still be truthful about the capability that needs nothing.
+  assert(/no executable surface/i.test(trust), "the README must keep saying oas.review needs no approval");
+  return `README documents \`oas trust\` for ${gated.join(" and ")}`;
 });
 
 // ───────────────────────────────────────────────── agent types and nesting
@@ -950,8 +1055,16 @@ check("the framework-repository child config overrides only inside oas/", () => 
   equal(inside.layers.knowledge.integration, "oas.okf", "the child inherits the knowledge layer");
   equal(inside.layers.messaging.integration, "oas.aweb", "the child inherits the messaging layer");
   assert(!inside.layers.tasks.integration, "the child inherits tasks none");
-  deepEqual(inside.injects.map((i) => i.source), ["oas-framework:framework"], "the framework injection resolves INSIDE oas/");
+  // The injection's SOURCE is prefixed with the name of the scope that supplied
+  // it, so this is the live evidence for the child fixture's distinct scope name
+  // (PARITY.md, delta 5): `oas-framework-repo` is the oas/ scope, not the root.
+  deepEqual(inside.injects.map((i) => i.source), ["oas-framework-repo:framework"],
+    "the framework injection resolves INSIDE oas/, and names the CHILD scope that supplied it");
   equal(inside.injects[0].file, join(child, "injects", "framework-workspace.md"), "and resolves to the child's own file");
+  // …while TEAM identity is inherited from the root profile untouched. The child
+  // declares no `team:` block, so a rename here would be a policy change wearing
+  // a scope-name costume.
+  equal(inside.team.name, "oas-framework", "team identity inside oas/ is the root profile's, unchanged");
 
   const outside = oasJson(["doctor", profile]);
   deepEqual(outside.injects, [], "the framework injection must NOT reach the workspace root");

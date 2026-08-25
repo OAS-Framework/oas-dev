@@ -16,13 +16,25 @@ reviewable diff instead of as a CI weather event.
 | `schemas/oas-package.schema.json` | `95b2347a…40339993` | `oas-package/oas-package.json` |
 | `schemas/capability-manifest.schema.json` | `165ebf36…cecf852b` | `oas-package/capabilities/oas-review/oas.json` |
 | `schemas/oas-config.schema.json` | `43333d3f…5023c7b8` | the shipped config template, parsed with the kernel's own YAML subset |
-| `schemas/oas-lock.schema.json` | `1d070063…4066f25f` | the lock shape the consumer probe asserts |
+| `schemas/oas-lock.schema.json` | `1d070063…4066f25f` | the **real `oas-lock.json` the released kernel writes** for the four-package closure, validated by the consumer probe |
 
 Provenance is **executed, not asserted**: the consumer probe re-hashes every
 file in `schemas/` against `docs/` inside the kernel it actually downloaded and
 fails on any drift. A vendored copy that quietly diverges would gate this
 package against a contract nobody published, which is the one failure mode a
 vendored schema has.
+
+**Every one of the four is APPLIED, and their absence is fatal.** Three gate
+documents in `npm test`; the lock schema gates the document the released kernel
+generates during the probe — the only lock here that was not built by a test to
+match its own expectations. The probe additionally seeds five corruptions into
+that lock (a malformed payload integrity, the unsupported transitional
+package-root shape, a traversal capability root, a missing required field, an
+undefined `lockfileVersion`) and requires the schema to catch each, because a
+validator that accepts everything passes an "it validates" assertion just as
+happily. And `scripts/validate-manifests.mjs` now REQUIRES all four files to
+exist and parse: a deleted schema used to switch its validation off silently
+while the gate still reported success, which turns a deletion into a green run.
 
 Note that the v0.20.0 *tag tree* self-reports `0.19.4`; only the published npm
 build reports `0.20.0`. Every provenance and probe statement here means the npm
@@ -100,10 +112,19 @@ rather than let it go stale.
   deployment-specific fields, resolved-config parity with the framework repo
   (`test/oas-dev-parity.test.mjs` + `PARITY.md`), a closer child-repository
   fixture used only for repo-specific policy, the README's install spellings
-  (`test/readme-install-sources.test.mjs`), and the kernel-free structural half
-  of the consumer contract (`test/oas-dev-consumer.test.mjs`, which mirrors the
-  engine's template validation: supplied = own capabilities ∪ dependency
+  (`test/readme-install-sources.test.mjs`), the README's checkable CLAIMS about
+  the closure's executable surface, the catalog-override semantics and the
+  version jump (`test/readme-claims.test.mjs`), and the kernel-free structural
+  half of the consumer contract (`test/oas-dev-consumer.test.mjs`, which mirrors
+  the engine's template validation: supplied = own capabilities ∪ dependency
   closure, plus layer agreement).
+
+  The gate also guards its own COVERAGE: it walks the repository and refuses to
+  run when a file `node --test` would discover sits outside the inventory it
+  names as argv — a `.test.js`, a suite outside `test/`, one of node's
+  dash/underscore naming conventions, or a symlinked directory under `test/`
+  that readdir-based recursion skips. Each of those is a suite that silently
+  never executes, and green looks identical either way.
 - **`npm run probe` (released kernel, hermetic).** `scripts/consumer-probe.mjs`
   npm-installs the PUBLISHED `@oas-framework/oas` at the version derived from
   this package's `compatibility.oas` floor, invokes it by absolute path under a
@@ -114,11 +135,18 @@ rather than let it go stale.
   no network beyond the kernel download, and no dependence on the machine's own
   deployment. It proves: schema provenance and the bundled-catalog fact above;
   that every install spelling the README documents is accepted by the kernel's
-  own `parsePackageSource` and every spelling documented as refused is refused;
-  the closure in both directions; pinned-Git acquisition against an ADVANCED
-  branch head; template adoption byte-for-byte; exact restore; the hook-less
-  trust outcome for `oas.review`; agent-type resolution and the nested `oas/`
-  override; scaffold-only spawn/retire; and the v1-lock `legacy-lock` refusal.
+  own `parsePackageSource`, that every spelling documented as refused is
+  refused, and that the refusal messages the README QUOTES are the kernel's own
+  strings character for character (a paraphrase reads as documentation and is a
+  lie about a program's output); the closure in both directions; that the
+  generated `oas-lock.json` satisfies the vendored lock schema, with five seeded
+  corruptions proving the schema is gating something; pinned-Git acquisition
+  against an ADVANCED branch head; template adoption byte-for-byte; exact
+  restore; the hook-less trust outcome for `oas.review` BESIDE the two
+  dependencies that do carry an executable surface — and that the README's trust
+  posture names each of those by `oas trust <id>`; agent-type resolution and the
+  nested `oas/` override; scaffold-only spawn/retire; and the v1-lock
+  `legacy-lock` refusal.
   Known released-0.20 kernel defects (the false-orphan `doctor` warning, the
   prototype-garbled config-key diagnostic) are recorded verbatim and worked
   around nowhere.
