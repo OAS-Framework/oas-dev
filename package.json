@@ -1,6 +1,6 @@
 {
   "name": "@oas-framework/oas-dev",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "OAS-project development policy, review discipline, and reference workspace profile.",
   "license": "MIT",
   "type": "module",

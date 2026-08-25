@@ -38,9 +38,9 @@ export const ROOT = resolve(fileURLToPath(new URL("../oas-package", import.meta.
 // sibling repo's DISTRIBUTED payload root. Jira and Linear are deliberately
 // absent — they remain adopter-selected, never oas.dev dependencies.
 export const SELECTOR_MAP = [
-  { local: "../../oas-okf/oas-package", catalog: "oas.okf", version: "1.4.1" },
-  { local: "../../oas-aweb/oas-package", catalog: "oas.aweb", version: "1.8.0" },
-  { local: "../../oas-authoring/oas-package", catalog: "oas.authoring", version: "1.0.0" },
+  { local: "../../oas-okf/oas-package", catalog: "oas.okf", version: "2.0.0" },
+  { local: "../../oas-aweb/oas-package", catalog: "oas.aweb", version: "2.0.0" },
+  { local: "../../oas-authoring/oas-package", catalog: "oas.authoring", version: "2.0.0" },
 ];
 
 export const LOCAL_FORM = SELECTOR_MAP.map((e) => e.local);
