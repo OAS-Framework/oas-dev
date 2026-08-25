@@ -719,8 +719,17 @@ check("the REAL generated lock validates against the vendored oas-lock schema", 
   // A keyword the shared evaluator does not implement is silently ignored, so a
   // schema that grew one would validate LESS than it appears to. Checked first,
   // because everything below inherits that assumption.
+  //
+  // The report is POSITIONAL: this schema's `propertyNames: { minLength: 1 }` is
+  // the case that proved a flat name check useless — `minLength` is implemented
+  // at an ordinary schema position, so the old report said "covered" while the
+  // evaluator read `propertyNames.pattern` and nothing else. Non-vacuity is
+  // asserted right here, on this schema's own shape, so a regression to a flat
+  // check cannot pass by returning an empty list.
   deepEqual(unsupportedKeywords(schema), [],
     "the vendored lock schema uses a keyword scripts/lib/json-schema.mjs does not implement — it would be silently skipped, weakening this check without changing its output");
+  assert(unsupportedKeywords({ propertyNames: { maxLength: 3 } }).length,
+    "unsupportedKeywords must report a keyword unsupported AT THE POSITION it appears, or its verdict above is worthless");
 
   const lock = lockOf(profile);
   const problems = schemaProblems(lock, schema, "oas-lock.json");

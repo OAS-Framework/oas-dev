@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { schemaProblems, unsupportedKeywords } from "../scripts/lib/json-schema.mjs";
 
 /**
  * ADVERSARIAL fixtures for scripts/validate-manifests.mjs.
@@ -710,3 +711,72 @@ for (const key of ["commands", "hooks"]) {
     assert.match(result.stderr, new RegExp(`oas\\.json\\.${key}.*must be a map`));
   });
 }
+
+// ---------------------------------------------------------------------------
+// THE SHARED EVALUATOR'S OWN COVERAGE REPORT.
+//
+// scripts/lib/json-schema.mjs implements a deliberate subset, and both the gate
+// and the probe rely on `unsupportedKeywords` to say when a schema has grown
+// past it. That report was a FLAT name check, so it answered a question nobody
+// asked: "does this keyword appear in the supported list anywhere?" rather than
+// "is it applied where it appears". `propertyNames: { minLength: 1 }` — which
+// the vendored lock schema really uses — passed as covered while the evaluator
+// read `propertyNames.pattern` and nothing else.
+// ---------------------------------------------------------------------------
+
+test("every vendored schema is fully covered by the evaluator", () => {
+  for (const name of VENDORED_SCHEMAS) {
+    const schema = JSON.parse(readFileSync(join(REPO, "schemas", name), "utf8"));
+    assert.deepEqual(unsupportedKeywords(schema), [], `${name} uses a keyword the evaluator does not apply`);
+  }
+});
+
+test("unsupportedKeywords reports a keyword unsupported AT THE POSITION it appears", () => {
+  // The defect, in both of the partially-read keywords. `minLength` and
+  // `pattern` are supported at an ordinary schema position; inside `not` only
+  // `pattern` is read, and inside `propertyNames` only `pattern` and
+  // `minLength`. A flat name check reported none of these.
+  assert.deepEqual(unsupportedKeywords({ propertyNames: { maxLength: 3 } }), ["#/propertyNames/maxLength"]);
+  assert.deepEqual(unsupportedKeywords({ not: { minLength: 3 } }), ["#/not/minLength"]);
+  assert.deepEqual(unsupportedKeywords({ not: { pattern: "^x" } }), [], "what IS read stays unreported");
+  // And nested inside the structures a real schema uses, so the walk is proved
+  // to descend rather than only to inspect the root.
+  assert.deepEqual(
+    unsupportedKeywords({ $defs: { row: { properties: { id: { anyOf: [{ type: "string" }] } } } } }),
+    ["#/$defs/row/properties/id/anyOf"]);
+  assert.deepEqual(
+    unsupportedKeywords({ properties: { rows: { items: { additionalProperties: { if: {} } } } } }),
+    ["#/properties/rows/items/additionalProperties/if"]);
+});
+
+test("unsupportedKeywords does not mistake DATA for keywords", () => {
+  // The same walk used to descend into `default`, `enum` and `const`, whose
+  // contents are values. A default that happened to contain a key named
+  // `minimum` was reported as an unimplemented keyword — noise that trains a
+  // reader to ignore the report the lock-schema check depends on.
+  assert.deepEqual(unsupportedKeywords({
+    type: "object",
+    default: { minimum: 1 },
+    enum: [{ anyOf: 1 }],
+    const: { format: "x" },
+    required: ["format"],
+    examples: [{ if: 1 }],
+  }), []);
+});
+
+test("propertyNames.minLength is APPLIED, not merely declared covered", () => {
+  // Non-vacuity for the check above: reporting the lock schema as fully covered
+  // is only worth anything if the keyword that made it covered actually gates.
+  const schema = { type: "object", propertyNames: { minLength: 1 }, additionalProperties: { type: "string" } };
+  assert.deepEqual(schemaProblems({ a: "x" }, schema), []);
+  assert.match(schemaProblems({ "": "x" }, schema).join(" "), /at least 1 character/);
+  // The real thing: an empty capability id in a lock document.
+  const lockSchema = JSON.parse(readFileSync(join(REPO, "schemas", "oas-lock.schema.json"), "utf8"));
+  const lock = {
+    lockfileVersion: 2,
+    packages: { "oas.dev": { source: "catalog:oas.dev@v2.0.0", commit: "0".repeat(40), version: "2.0.0", integrity: `sha256-${"0".repeat(64)}`, path: "oas-package" } },
+    capabilities: { "": { package: "oas.dev", path: "capabilities/oas-review", integrity: `sha256-${"0".repeat(64)}`, trusted: false } },
+  };
+  assert.ok(schemaProblems(lock, lockSchema, "oas-lock.json").length,
+    "an EMPTY capability id must be refused — that is what propertyNames.minLength is there for");
+});
