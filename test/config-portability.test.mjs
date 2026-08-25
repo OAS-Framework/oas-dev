@@ -309,6 +309,44 @@ test("commentLeaks still catches a real machine path beside a URL", () => {
   }
 });
 
+test("a machine path ADJACENT to a URL is not laundered by it", () => {
+  // The bypass this closes. The URL span used to run to the next whitespace or
+  // quote and nothing else, so any punctuation a reader sees as ending the link
+  // was swallowed along with everything after it — and a reviewer reading "a
+  // link, then my home directory" got a scan that read "one long URL".
+  //
+  // No separating space in any of these: that is the point.
+  for (const [label, comment] of [
+    ["a closing paren ending the link", "# see https://example.test/x)/Users/alice/notes.md"],
+    ["a comma ending the link", "# see https://example.test/docs,/Users/alice/notes.md"],
+    ["an opening paren ending the link", "# see https://example.test/docs(/Users/alice/notes.md"],
+    ["a tilde home path glued to the link", "# see https://example.test/a~/oas/notes.md"],
+  ]) {
+    assert.ok(commentLeaks(comment).length, `MUST be flagged — ${label}: ${comment}`);
+  }
+  // The same laundering worked on VALUES, which share withoutPortableUrls.
+  assert.ok(localPathIn("https://example.test/x)/Users/alice/private.yaml"),
+    "the value half must see the path after the link too");
+});
+
+test("…and the URL exemption itself still holds, punctuation and tildes included", () => {
+  // Non-vacuity for the tightening above: terminating a span EARLY can only hand
+  // more text to the classifiers, so the failure mode it risks is a false report
+  // on a perfectly portable link. Each of these is one.
+  for (const [label, comment] of [
+    // The original accept case: a URL whose PATH spells /Users/.
+    ["a URL whose path spells /Users/", "# see https://example.com/Users/guide"],
+    ["a URL whose path spells /home/", "# see https://docs.example.test/home/getting-started"],
+    ["a ~user URL, where the tilde is NOT a home path", "# see https://example.test/~alice/Users/guide"],
+    // `=` and `&` are query syntax and must never end a span, or every
+    // parameterized documentation link becomes a finding.
+    ["a query string", "# see https://example.test/search?q=a&section=/Users/x"],
+    ["a fragment", "# see https://example.test/guide#/Users/section"],
+  ]) {
+    assert.deepEqual(commentLeaks(comment), [], `MUST NOT be flagged — ${label}: ${comment}`);
+  }
+});
+
 test("the two surfaces really do have different strictness", () => {
   // Stated as an executable fact rather than a header claim: the SAME text is a
   // leak as a value and documentation as a comment. That asymmetry is the whole

@@ -102,11 +102,41 @@ export const CREDENTIAL_ASSIGNMENT = new RegExp(
   "i",
 );
 
-/** A COMPLETE URL span anywhere inside a scalar. Used to remove portable
+/**
+ * A COMPLETE URL span anywhere inside a scalar. Used to remove portable
  * references before looking for local paths in what remains — the exemption
  * belongs to the URL itself, not to the whole scalar because a URL happened to
- * start it. `file:` spans are deliberately left in place: they ARE local paths. */
-const URL_SPAN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
+ * start it. `file:` spans are deliberately left in place: they ARE local paths.
+ *
+ * WHERE THE SPAN ENDS IS THE WHOLE SECURITY PROPERTY, and it used to end only at
+ * whitespace or a quote. Everything else was swallowed, so a machine path
+ * written straight after a URL was laundered by the link in front of it:
+ *
+ *   https://example.test/x)/Users/alice      the `)` and the path, all "URL"
+ *   https://example.test/docs,/Users/alice   likewise for `,`
+ *   https://example.test/docs(/Users/alice   and for `(`
+ *   https://example.test/a~/oas/notes.md     and for a tilde home path
+ *
+ * Each is a comment or value a reviewer reads as "a link, then my home
+ * directory", and the scan read as "one long URL". So the span now ends at the
+ * PROSE BOUNDARIES — whitespace, quotes, backtick, brackets, parentheses, comma,
+ * semicolon, angle brackets, pipe, backslash, caret — the same characters
+ * TOKEN_SPLIT already treats as separating a path from surrounding text. `=` and
+ * `&` are deliberately NOT boundaries: they are query-string syntax, and
+ * terminating there would expose every `?a=1&b=2` to the token scan.
+ *
+ * The tilde is handled by lookahead rather than as a boundary character, because
+ * `~` is legal in a URL path: the span stops before a `~/` SEQUENCE (the
+ * home-path form) and carries an ordinary `~user` on. So
+ * https://example.test/~alice/guide survives intact and
+ * https://example.test/a~/oas/notes.md gives the residual text back to the
+ * scanner. A URL that genuinely contains `~/` must be spelled `%7E/`.
+ *
+ * Terminating early can only ever hand MORE text to the classifiers, never
+ * less, so the direction of any residual inaccuracy is a loud false report
+ * rather than a laundered leak.
+ */
+const URL_SPAN = /\b[a-z][a-z0-9+.-]*:\/\/(?:(?!~\/)[^\s"'`(),;<>{}[\]|\\^])*/gi;
 function withoutPortableUrls(text) {
   return String(text).replace(URL_SPAN, (span) => (FILE_SCHEME.test(span) ? span : " ".repeat(span.length)));
 }
