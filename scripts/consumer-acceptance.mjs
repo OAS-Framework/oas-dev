@@ -33,11 +33,20 @@
  *                  this package with its three siblings co-located.
  *     --oas      : path to the released `oas` CLI (default: `oas` on PATH).
  *
- * FAIL-CLOSED below the floor: the packages declare compatibility.oas
- * ">=0.19.0". Against a kernel below that, acquisition is correctly rejected
+ * FAIL-CLOSED below the floor: the v2 packages declare compatibility.oas
+ * ">=0.20.0". Against a kernel below that, acquisition is correctly rejected
  * with `incompatible-oas`; this script exits 2 with a clear "release-pending"
  * message rather than pretending to pass. It is NOT run silently in CI until a
- * published >=0.19.0 kernel and the pinned consumer fixtures exist.
+ * published >=0.20.0 kernel and the pinned consumer fixtures exist.
+ *
+ * The kernel under test must be the PUBLISHED npm @oas-framework/oas@0.20.0.
+ * The v0.20.0 TAG TREE self-reports 0.19.4, so a kernel run out of a source
+ * checkout of that tag fails this floor guard and would be misread as
+ * release-pending.
+ *
+ * STATUS: superseded by scripts/consumer-probe.mjs (the canonical `npm run
+ * probe` entrypoint). This file is kept compiling as the behavioral reference
+ * for that rebuild.
  */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
@@ -50,8 +59,9 @@ const SELECTOR = arg("selector", null);
 if (!SELECTOR) { console.error("usage: consumer-acceptance.mjs --selector <oas.dev source> [--oas <oas-bin>]"); process.exit(2); }
 
 const run = (args, cwd) => execFileSync(OAS, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+const OAS_FLOOR_MINOR = 20;
 const releasePending = (found) => {
-  console.error(`release-pending: this acceptance test requires a published OAS >=0.19.0 kernel (found ${found}). A >=0.19.0 package is correctly rejected below the floor (incompatible-oas); re-run against the released kernel.`);
+  console.error(`release-pending: this acceptance test requires the PUBLISHED npm OAS >=0.${OAS_FLOOR_MINOR}.0 kernel (found ${found}). A >=0.${OAS_FLOOR_MINOR}.0 package is correctly rejected below the floor (incompatible-oas); re-run against the published kernel — note the v0.20.0 tag tree self-reports 0.19.4.`);
   process.exit(2);
 };
 // Parse the JSON envelope even when the CLI exits nonzero (the envelope is on
@@ -73,11 +83,11 @@ function runJson(args, cwd) {
 }
 const ok = (cond, msg) => { if (!cond) { console.error("FAIL:", msg); process.exit(1); } console.log("  ok:", msg); };
 
-// Floor guard — do not fake a pass on a pre-0.19.0 kernel.
+// Floor guard — do not fake a pass on a pre-0.20.0 kernel.
 let version = "unknown";
 try { version = run(["--version"]).trim(); } catch { /* older CLIs may differ */ }
 const m = version.match(/(\d+)\.(\d+)\.(\d+)/);
-if (m && Number(m[1]) === 0 && Number(m[2]) < 19) releasePending(version);
+if (m && Number(m[1]) === 0 && Number(m[2]) < OAS_FLOOR_MINOR) releasePending(version);
 
 const base = mkdtempSync(join(tmpdir(), "oas-dev-acceptance-"));
 try {
