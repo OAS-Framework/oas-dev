@@ -8,7 +8,15 @@
 # worktree mode, default OAS policy — is inherited from the adopted root
 # oas.dev profile. The operator adds the resolved team id and any auth to the
 # local snapshot only, never here.
-name: oas-framework
+# The framework repository's own SCOPE name, aligned with the oas-config.yaml
+# the OAS framework repo actually commits today. It is deliberately NOT
+# `oas-framework`: the root profile already carries that as the workspace name
+# and, in `team.name`, as the TEAM identity. A distinct scope name here lets
+# `oas doctor` inside oas/ say which scope it resolved without touching the team
+# block — which this child does not declare at all, so team identity is
+# inherited from the root profile unchanged. See PARITY.md, "Intentional
+# deltas".
+name: oas-framework-repo
 
 # Extra unconditional instruction block for every instance operating inside oas/.
 agents-md-injection:

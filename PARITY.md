@@ -20,13 +20,27 @@ kernel) and `test/oas-dev-consumer.test.mjs` (structural, today).
 The 0.20 contract requires a package's config templates to live under
 `config-templates/`, so the file this document argues about now ships at
 `oas-package/config-templates/default/oas-config.yaml`. Those are the same bytes
-that shipped from `configs/default/oas-config.yaml` at the v1.0.0 tag: the
-parity suite pins the template's sha256 and additionally asserts that the
-abandoned `configs/` root is gone, so no adopter can reach the old copy and no
-edit can hide inside a restructure. Every parity claim below is therefore
-inherited from v1.0.0 unchanged. The one thing 2.0.0 does change is *provenance*
-— delta 4 — because the dependency selectors that supply the providers moved to
-the v2 leaf tags.
+that shipped from `configs/default/oas-config.yaml` at the v1.0.0 tag.
+
+`test/oas-dev-parity.test.mjs` proves that in two ways, and it is worth being
+precise about which does what:
+
+- the **pinned sha256 literal** (`daf943e7…`) says the shipped template's bytes
+  have not changed since the v2 restructure. That is the property that stops a
+  profile *edit* from hiding inside a file *move* — and it is all a literal can
+  say on its own;
+- the **derivation** makes the stronger claim self-verifying: the suite reads
+  `oas-package/configs/default/oas-config.yaml` back out of git (at the `v1.0.0`
+  tag, falling back to the release branch's base commit `dce83b6`) and compares
+  it byte for byte with what ships today. A shallow CI checkout has neither ref,
+  so the derivation is skipped there with a diagnostic and the literal stands in
+  — which is why both exist rather than either alone.
+
+The suite additionally asserts that the abandoned `configs/` root is gone, so no
+adopter can reach the old copy. Every parity claim below is therefore inherited
+from v1.0.0 unchanged. The one thing 2.0.0 does change is *provenance* — delta 4
+— because the dependency selectors that supply the providers moved to the v2
+leaf tags.
 
 Parity is proven mechanically by `test/oas-dev-parity.test.mjs`, which resolves
 three fixtures with a dependency-free config reader and compares the effective
@@ -39,7 +53,8 @@ per-family view:
 - `oas-package/config-templates/default/oas-config.yaml` — the shipped portable
   root profile.
 - `test/fixtures/framework-child-oas-config.yaml` — the closer override the
-  `oas/` repo keeps after migration.
+  `oas/` repo keeps after migration, aligned with the `oas-config.yaml` that
+  repository actually commits today (including its scope name; see delta 5).
 
 `adopted = deepMerge(rootProfile, frameworkChild)` is the resolution inside
 `oas/`. For `framework-authors` and `developers`, `adopted` equals the legacy
@@ -60,7 +75,7 @@ authors, review → developers, worktree work-mode, and the
 | worktree work-mode | declared | declared |
 | default OAS policy (`oas:`) | present | present |
 | framework-workspace injection **inside `oas/`** | root config | child `oas/` config (closer) |
-| identity/team **name** | `oas-framework` | `oas-framework` (preserved — the workspace changes scope, not team identity) |
+| identity/team **name** (`team.name`) | `oas-framework` | `oas-framework` (preserved — the workspace changes scope, not team identity; the child `oas/` config declares no `team:` block at all, so identity is inherited unchanged) |
 
 ## Intentional deltas (each approved; none silent)
 
@@ -79,6 +94,14 @@ authors, review → developers, worktree work-mode, and the
    binds capability IDs, which do not change with the selector, so moving the
    pins from the v1 tags to the v2 tags is a provenance change and not a policy
    change — the resolved per-family view is identical either way.
+5. **The `oas/` child scope has its own NAME** — `name: oas-framework-repo` in
+   the child config against `name: oas-framework` in the root profile. `name` is
+   the SCOPE's name, and a distinct one makes `oas doctor` inside `oas/` report
+   which scope it resolved. TEAM identity is untouched: the child declares no
+   `team:` block, so `team.name` resolves to the root profile's `oas-framework`.
+   The fixture mirrors what the framework repository commits today, and the
+   parity suite asserts both halves — the differing scope name AND the inherited,
+   unchanged team.
 
 ## Layering rule (why the injection stays in the child `oas/` config)
 
@@ -98,9 +121,17 @@ into a root where it cannot resolve or would mis-target siblings.
 
 ## Live equivalence at migration time
 
-The fixture comparison is portable and runs in the standalone repo. A live
-`oas doctor --json` equivalence check (legacy framework-repo resolution vs
-adopted-root + child-repo resolution, with the released capabilities installed)
-is part of the post-publication workspace probe — it requires the released
-capabilities to be installed in the workspace, so it is run by the operator once
-the non-Git workspace is assembled (checklist step B9).
+The fixture comparison is portable and runs in the standalone repo, and
+`scripts/consumer-probe.mjs` drives the same two fixtures through the released
+kernel: it adopts the root profile, drops this document's `oas/` child fixture
+into a nested scope, and asserts the resolved chain, the inherited layers and
+the framework injection's scoping live.
+
+What is still NOT proved here is *legacy-versus-adopted* equivalence measured by
+the kernel itself — `oas doctor --json` against the framework repository's
+historical resolution, compared with the adopted-root + child-repo resolution.
+That needs a real workspace with the released capabilities installed, which no
+CI job and no hermetic probe can stand up, so it is an operator step performed
+once when the non-Git workspace is assembled. Until it is run, the parity
+argument rests on the fixture comparison and the probe — which is why both are
+mechanical rather than prose.

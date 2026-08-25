@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -114,6 +115,24 @@ test("preserved: the established team name oas-framework, with no machine state 
   assert.equal("id" in profile.team, false, "no resolved team id in the package");
 });
 
+test("the child oas/ config names the REPO SCOPE and inherits team identity untouched", () => {
+  // The fixture's `name` matches the oas-config.yaml the framework repository
+  // actually commits (`oas-framework-repo`), not the root profile's
+  // `oas-framework`. That difference is deliberate and is the whole content of
+  // the delta: `name` is the SCOPE's name, and a distinct one makes `oas doctor`
+  // inside oas/ report which scope it resolved.
+  assert.equal(child.name, "oas-framework-repo", "the fixture must mirror the framework repo's own config");
+  assert.notEqual(child.name, profile.name, "the scope name is what differs");
+  // IDENTITY is the team block, and the child does not declare one — so the
+  // adopted resolution inside oas/ carries the root profile's team through
+  // unchanged. A fixture that renamed the TEAM would be a policy change wearing
+  // a scope-name costume, and this is what would catch it.
+  assert.equal("team" in child, false, "the child must not redeclare team identity");
+  assert.equal(adopted.team.name, "oas-framework", "team identity inside oas/ is the root profile's, unchanged");
+  assert.equal(adopted.team.name, legacy.team.name, "…and therefore still the legacy team");
+  assert.equal("id" in adopted.team, false, "no resolved team id reaches the package");
+});
+
 test("delta: messaging is explicit aweb in the portable root (legacy inherited it from the outer laptop config)", () => {
   assert.equal(effective(legacy, "developers").messaging, "none", "legacy config declares no messaging (came from the outer config)");
   assert.equal(effective(adopted, "developers").messaging, "oas.aweb", "portable root declares aweb explicitly");
@@ -151,16 +170,60 @@ test("delta: released package provenance flows through oas.dev catalog selectors
   assert.match(read(...TEMPLATE), /from: installed/);
 });
 
-test("parity of the BYTES: only the template's location moved in the 0.20 restructure", () => {
-  // The v1 tag carried this same file at configs/default/oas-config.yaml. If a
-  // future edit changes the profile itself, the parity assertions above are the
-  // ones that must be re-argued — this test pins that the RESTRUCTURE did not.
+/**
+ * WHAT THE PINNED SHA ACTUALLY PINS, stated exactly.
+ *
+ * On its own, a literal digest in a test says only "these bytes have not
+ * changed since somebody wrote this literal down". That is a real and useful
+ * property — it is what stops a profile EDIT from hiding inside the 0.20
+ * restructure — but it is not the claim PARITY.md makes. PARITY.md claims the
+ * v2 template is the V1 FILE, byte for byte.
+ *
+ * So the claim is derived rather than asserted, wherever git can supply the old
+ * bytes: the v1 file is read back out of history and hashed here, at test time.
+ * The literal stays as the OFFLINE ANCHOR, because a shallow CI checkout has
+ * neither the tag nor the base commit, and a test that quietly checked nothing
+ * in that case would be the worse outcome.
+ */
+const V1_TEMPLATE_PATH = "oas-package/configs/default/oas-config.yaml";
+const V1_REFS = [
+  ["the published v1.0.0 tag", "v1.0.0"],
+  ["the release branch's base commit", "dce83b6"],
+];
+const PINNED_V1_SHA = "daf943e7b9bd1a3b9118c4a85cb39fdde1e37ac220ae2f8aabcfe12bc06a3655";
+
+/** The v1 template's bytes at `ref`, or undefined when history is unavailable
+ * (shallow clone, no tags, no git). */
+function v1TemplateAt(ref) {
+  const run = spawnSync("git", ["-C", REPO, "show", `${ref}:${V1_TEMPLATE_PATH}`], {
+    encoding: "buffer", maxBuffer: 4 * 1024 * 1024,
+  });
+  return run.status === 0 && run.stdout?.length ? run.stdout : undefined;
+}
+
+test("parity of the BYTES: only the template's location moved in the 0.20 restructure", (t) => {
   const source = read(...TEMPLATE);
-  assert.equal(
-    createHash("sha256").update(source).digest("hex"),
-    "daf943e7b9bd1a3b9118c4a85cb39fdde1e37ac220ae2f8aabcfe12bc06a3655",
-    "the v2 template must be the v1 profile byte for byte; only its path changed",
-  );
+  const shipped = createHash("sha256").update(source).digest("hex");
+
+  // Offline anchor: unchanged since the v2 restructure. This alone is what
+  // stops a profile edit from hiding inside a file move.
+  assert.equal(shipped, PINNED_V1_SHA,
+    "the shipped template's bytes changed — if that is intended, the parity assertions above are the ones that must be re-argued, not this literal");
+
+  // Self-verifying half: the same bytes really are the v1 file's, read out of
+  // history rather than taken on trust.
+  const derived = V1_REFS.map(([label, ref]) => [label, v1TemplateAt(ref)]).filter(([, bytes]) => bytes);
+  if (!derived.length) {
+    t.diagnostic(`git could not supply ${V1_TEMPLATE_PATH} at ${V1_REFS.map(([, r]) => r).join(" or ")} ` +
+      "(shallow checkout, no tags, or no git) — the pinned literal above is standing in for the derivation");
+    return;
+  }
+  for (const [label, bytes] of derived) {
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), shipped,
+      `the v2 template is not byte-identical to the v1 file at ${label} — the 0.20 restructure moved the profile, it did not change it`);
+    assert.equal(bytes.toString("utf8"), source, `and the two differ in content at ${label}`);
+  }
+
   // And the abandoned location is really gone, so nothing can adopt the old copy.
   assert.equal(existsSync(join(ROOT, "configs")), false, "the pre-0.20 configs/ root must not survive");
 });
