@@ -10,13 +10,107 @@ permissions:
 
 jobs:
   validate-and-test:
+    # OFFLINE. The gate-and-runner (scripts/check-test-scripts.mjs) rebuilds the
+    # canonical scripts block, refuses anything else, then runs manifest
+    # validation and exactly the suites under test/ as argv — no shell, no bare
+    # discovery. Nothing here touches the network, so a registry outage can
+    # never turn this job amber.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The parity suite DERIVES the shipped template's sha from history: it
+          # reads oas-package/configs/default/oas-config.yaml back out of the
+          # v1.0.0 tag and out of dce83b6 and hashes what git returns. A default
+          # shallow checkout has neither the tag nor the commit, so the suite
+          # fell back to its offline literal and the derivation never ran in CI
+          # at all — the only thing CI proved was that a constant matched
+          # itself. Full history plus tags is what makes the job exercise the
+          # claim PARITY.md actually makes.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Validate manifests and run unit tests
+      - name: Validate manifests, config template, schemas, and README install spellings
+        env:
+          # …and, having paid for the history, REQUIRE the derivation instead of
+          # accepting the fallback. Without this a future checkout change would
+          # silently return the job to comparing a literal with itself.
+          OAS_REQUIRE_PARITY_DERIVATION: "1"
         run: npm test
-      - name: Consumer probe status
-        run: echo "PENDING(released-0.19.0-fixtures; package-runtime-api.md Consumer fixture) acquire -> lock -> trust -> activate -> spawn"
+      # The same three selectors scripts/validate-manifests.mjs imports and
+      # enforces, asserted on their own so a manifest that drifts to a floating
+      # ref, a bare id or a local path is reported as exactly that.
+      - name: Dependency selectors are the published immutable catalog form
+        run: node scripts/catalog-selectors.mjs --check
+
+  consumer-probe:
+    # Drives the PUBLISHED @oas-framework/oas kernel at this package's declared
+    # compatibility floor, in a throwaway sandbox: schema provenance -> README
+    # install spellings against the kernel's own parser -> dependency closure in
+    # both directions -> pinned-Git acquisition -> `oas init --package` template
+    # adoption -> exact restore -> trust -> agent types and the nested oas/
+    # override -> scaffold-only spawn/retire -> the v1-lock cutover refusal.
+    #
+    # Two reasons it is its own job. It needs the npm registry (the kernel
+    # download), and — unlike a leaf package's probe — it needs the FIVE
+    # official leaf repositories at their immutable v2 tags, because oas.dev is
+    # a PROFILE package whose value is a dependency closure. They are checked
+    # out beside this repository and served to the kernel as local `file://`
+    # bare clones, so the probe itself stays hermetic.
+    #
+    # VISIBILITY ASSUMPTION: all five sibling repositories (OAS-Framework/oas-okf,
+    # -aweb, -authoring, -jira, -linear) are PUBLIC, verified at the time this
+    # job was written, so the five checkout steps below need no `token:` — the
+    # default GITHUB_TOKEN is scoped to this repository only and cannot read a
+    # private sibling. If any of them is ever made private, each of those steps
+    # needs `token: ${{ secrets.<PAT> }}` with read access to it, or the job
+    # fails at checkout rather than in the probe.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: oas-dev
+          # `git clone --bare` refuses a shallow source, and the probe clones
+          # this checkout to pin its own HEAD in the synthetic catalog.
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-okf
+          ref: v2.0.0
+          path: oas-okf
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-aweb
+          ref: v2.0.0
+          path: oas-aweb
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-authoring
+          ref: v2.0.0
+          path: oas-authoring
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-jira
+          ref: v2.0.0
+          path: oas-jira
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-linear
+          ref: v2.0.0
+          path: oas-linear
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Consumer probe against the released OAS kernel
+        working-directory: oas-dev
+        env:
+          # The probe pins the leaf commits itself and verifies each v2.0.0 tag
+          # resolves to them; this only says WHERE the repositories are.
+          OAS_PROBE_WORKSPACE: ${{ github.workspace }}
+        run: npm run probe

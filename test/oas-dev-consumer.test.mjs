@@ -10,8 +10,9 @@ import { fileURLToPath } from "node:url";
 // plus layer agreement) WITHOUT depending on the kernel, so it runs in the
 // standalone repo today. The LIVE end-to-end run (acquire → v2 lock graph →
 // snapshot → bare install/reconcile → doctor providers/targets → nested
-// override) is scripts/consumer-acceptance.mjs, gated on a published OAS
-// >=0.19.0 kernel. See SCHEMA-STATUS.md.
+// override) is the consumer probe, gated on the PUBLISHED OAS >=0.20.0 kernel
+// (the v0.20.0 tag tree self-reports 0.19.4, so only the npm build will do).
+// See SCHEMA-STATUS.md.
 
 const REPO = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const ROOT = join(REPO, "oas-package");
@@ -37,7 +38,11 @@ function parseYaml(text) {
 }
 
 const pkg = readJson(ROOT, "oas-package.json");
-const profile = parseYaml(read(ROOT, "configs", "default", "oas-config.yaml"));
+// Read the template through the MANIFEST descriptor rather than a second
+// hard-coded copy of the path: an adopter reaches it the same way, so a
+// descriptor that stopped pointing at the shipped file would fail here too.
+const TEMPLATE_PATH = pkg.configTemplates.default.path;
+const profile = parseYaml(read(ROOT, ...TEMPLATE_PATH.split("/")));
 
 // Resolve the closure shape the way `oas init --package oas.dev` does: the
 // root's own exported capabilities plus its immutable released dependencies.
@@ -47,10 +52,13 @@ const ownCaps = pkg.capabilities.map((rel) => {
   const cap = readJson(ROOT, rel, "oas.json");
   return { id: cap.capability, layer: cap.layer || null, from: rel };
 });
+// Dependencies are package SOURCE SPECS in official catalog form
+// `<package id>@<selector>`, where the selector overrides the catalog's own ref
+// — so each v-tag here pins the acquired source immutably.
 const RELEASED_DEPENDENCIES = {
-  "oas.okf@v1.4.1": { package: "oas.okf", id: "oas.okf", layer: "knowledge" },
-  "oas.aweb@v1.8.0": { package: "oas.aweb", id: "oas.aweb", layer: "messaging" },
-  "oas.authoring@v1.0.0": { package: "oas.authoring", id: "oas.authoring", layer: null },
+  "oas.okf@v2.0.0": { package: "oas.okf", id: "oas.okf", layer: "knowledge" },
+  "oas.aweb@v2.0.0": { package: "oas.aweb", id: "oas.aweb", layer: "messaging" },
+  "oas.authoring@v2.0.0": { package: "oas.authoring", id: "oas.authoring", layer: null },
 };
 const depCaps = (pkg.dependencies || []).map((dep) => {
   const cap = RELEASED_DEPENDENCIES[dep];

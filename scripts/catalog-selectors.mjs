@@ -1,131 +1,131 @@
 #!/usr/bin/env node
-// Deterministic catalog-selector replacement gate for oas.dev dependencies.
-//
-// Pre-publication, oas.dev depends on its three sibling official packages by
-// LOCAL package-root-relative path pointing at each sibling repo's DISTRIBUTED
-// payload root (`oas-package/`), so a co-located consumer probe resolves a real
-// dependency closure without any published catalog entry (the engine supports
-// relative-path dependencies between co-located local packages).
-//
-// At publication each local path is replaced by an immutable official catalog
-// selector. That replacement is FULLY DETERMINISTIC — this module IS the
-// mapping and the gate, never a free-form TODO placeholder in the manifest:
-//
-//   ../../oas-okf/oas-package        ->  oas.okf@<release version>
-//   ../../oas-aweb/oas-package       ->  oas.aweb@<release version>
-//   ../../oas-authoring/oas-package  ->  oas.authoring@<release version>
-//
-// The catalog version is read deterministically from each sibling package's own
-// oas-package.json release version, so `--apply` produces exactly the selectors
-// the released sibling packages define — no human guess, no placeholder.
-//
-// Usage (run from the package root):
-//   node scripts/catalog-selectors.mjs --check   # verify pre-publication local form + resolvable release siblings
-//   node scripts/catalog-selectors.mjs --print   # print the deterministic catalog selectors
-//   node scripts/catalog-selectors.mjs --apply   # rewrite oas-package.json to catalog form (publication only)
-
-import { readFileSync, writeFileSync } from "node:fs";
+/**
+ * THE PINNED DEPENDENCY SELECTORS of oas.dev, and the assertion that the shipped
+ * manifest carries exactly them.
+ *
+ * WHAT THIS FILE USED TO BE, AND WHY IT ISN'T. Before publication the three
+ * sibling packages were depended on by LOCAL relative path, and this module was
+ * the deterministic local→catalog mapping plus an `--apply` that rewrote the
+ * manifest at release time. That world is over: the manifest has shipped in
+ * catalog form since v2.0.0 was cut, so the local half was dead code describing
+ * a state the repository is no longer in — `--check` fell through to it only
+ * when the published form did NOT match, and its "pre-publication local form OK"
+ * message could never be printed truthfully again. Dead code that documents an
+ * untrue state is worse than no code: the next maintainer believes it.
+ *
+ * What remains is the part that still earns its place — ONE definition of this
+ * release's dependency selectors, imported by scripts/validate-manifests.mjs so
+ * the gate and this check cannot disagree, and a CLI so CI can assert it
+ * without running the whole gate.
+ *
+ * A SELECTOR IS A GIT REF, NOT A SEMVER RANGE. `oas.okf@v2.0.0` overrides the
+ * catalog entry's own ref with the immutable released tag; `oas.okf@2.0.0`
+ * parses and then fails to resolve. And an unpinned `oas.okf` resolves to
+ * whatever ref the consumer's catalog holds — v1 on the released 0.20.0
+ * kernel's bundled catalog — which is why a bare id may never ship here.
+ *
+ * Usage (from the repository root):
+ *   node scripts/catalog-selectors.mjs --check   # the manifest carries exactly these (default)
+ *   node scripts/catalog-selectors.mjs --print   # one selector per line
+ */
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The package root (`oas-package/`) is where oas-package.json lives; this dev
-// tool sits in the sibling repo-level `scripts/` dir, so the payload root is
-// `../oas-package` from here. Sibling deps are resolved relative to it.
+/** The DISTRIBUTED payload root, where oas-package.json lives. */
 export const ROOT = resolve(fileURLToPath(new URL("../oas-package", import.meta.url)));
 
-// Ordered, exhaustive local-form -> catalog-id mapping: oas.dev's exact
-// pre-publication dependency list, in order. Each local path points at the
-// sibling repo's DISTRIBUTED payload root. Jira and Linear are deliberately
-// absent — they remain adopter-selected, never oas.dev dependencies.
-export const SELECTOR_MAP = [
-  { local: "../../oas-okf/oas-package", catalog: "oas.okf", version: "1.4.1" },
-  { local: "../../oas-aweb/oas-package", catalog: "oas.aweb", version: "1.8.0" },
-  { local: "../../oas-authoring/oas-package", catalog: "oas.authoring", version: "1.0.0" },
-];
+/**
+ * THE single definition of this release's immutable tag — for this package and
+ * for the official leaves alike.
+ *
+ * It used to be defined twice, here and in scripts/lib/readme-install-sources.mjs,
+ * with the same literal under two different justifications ("this release's
+ * immutable leaf tag" and "this release's immutable tag"). That is the shape a
+ * constant drifts into: one copy gets bumped, the other does not, and each
+ * file's tests keep passing against its own. The README lib imports this one
+ * now, and test/oas-dev-profile.test.mjs cross-checks it against the shipped
+ * manifest's own version, so the literal cannot outlive the release it names.
+ *
+ * One constant is right because oas.dev and the official leaves ship in lockstep
+ * at the same tag: every PUBLISHED_SELECTORS entry below carries it, and so does
+ * every install spelling the README documents.
+ */
+export const RELEASE_TAG = "v2.0.0";
 
-export const LOCAL_FORM = SELECTOR_MAP.map((e) => e.local);
-export const PUBLISHED_FORM = SELECTOR_MAP.map((e) => `${e.catalog}@v${e.version}`);
+/**
+ * The exact dependency set, in official catalog source-spec form
+ * `<package id>@<selector>`.
+ *
+ * oas.jira and oas.linear are deliberately absent and are refused by name in
+ * the validator: a task layer is the ADOPTER's choice, and depending on one
+ * would drag a provider into every oas.dev closure. The consumer probe proves
+ * that absence is policy rather than a catalog gap by installing oas.jira
+ * successfully from the SAME catalog that produced the four-package closure.
+ */
+export const PUBLISHED_SELECTORS = Object.freeze([
+  `oas.okf@${RELEASE_TAG}`,
+  `oas.aweb@${RELEASE_TAG}`,
+  `oas.authoring@${RELEASE_TAG}`,
+]);
 
-function readManifest(dir) {
-  return JSON.parse(readFileSync(join(dir, "oas-package.json"), "utf8"));
-}
+/** A selector that pins an immutable release: `<catalog id>@v<major.minor.patch>`. */
+const PINNED_SELECTOR = /^[a-z0-9][a-z0-9._-]*@v\d+\.\d+\.\d+$/;
 
-/** Deterministic catalog selector for one entry; the version is read from the
- * co-located sibling package's own release version, making the swap exact. */
-export function catalogSelector(entry, { root = ROOT, verifySibling = true } = {}) {
-  if (!/^\d+\.\d+\.\d+$/.test(entry.version)) throw new Error(`mapped ${entry.catalog} has invalid release version "${entry.version}"`);
-  const siblingDir = resolve(root, entry.local);
-  if (verifySibling) {
-    const manifest = readManifest(siblingDir);
-    if (manifest.package !== entry.catalog)
-      throw new Error(`sibling at ${entry.local} declares package "${manifest.package}", expected "${entry.catalog}"`);
-    if (manifest.version !== entry.version)
-      throw new Error(`sibling ${entry.catalog} is ${manifest.version}, selector map pins ${entry.version}`);
+export const readManifest = (root = ROOT) =>
+  JSON.parse(readFileSync(join(root, "oas-package.json"), "utf8"));
+
+/**
+ * Everything wrong with the manifest's `dependencies`, judged against
+ * PUBLISHED_SELECTORS.
+ *
+ * Order is NOT compared: the kernel records dependencies as sorted package ids
+ * in the lock, so ordering here carries no meaning and must not be something a
+ * reviewer has to check.
+ *
+ * @returns {string[]} problems; empty means the manifest is in published form
+ */
+export function publishedSelectorProblems({ root = ROOT, manifest } = {}) {
+  const problems = [];
+  const doc = manifest || readManifest(root);
+  const deps = doc.dependencies;
+  if (!Array.isArray(deps)) {
+    return [`oas-package.json has no dependencies array (found ${deps === undefined ? "nothing" : typeof deps})`];
   }
-  return `${entry.catalog}@v${entry.version}`;
-}
-
-export function catalogSelectors(opts = {}) {
-  return SELECTOR_MAP.map((e) => catalogSelector(e, opts));
-}
-
-/** Verify the manifest is currently in the exact pre-publication local form and
- * that every local path resolves to the right sibling at a release version —
- * this is what makes the catalog replacement deterministic rather than a guess. */
-export function checkLocalForm({ root = ROOT } = {}) {
-  const deps = readManifest(root).dependencies;
-  if (!Array.isArray(deps)) throw new Error("oas-package.json has no dependencies array");
-  const same = deps.length === LOCAL_FORM.length && deps.every((d, i) => d === LOCAL_FORM[i]);
-  if (!same)
-    throw new Error(
-      `dependencies are not the expected pre-publication local form.\n  found: ${JSON.stringify(deps)}\n  want:  ${JSON.stringify(LOCAL_FORM)}`,
+  for (const spec of deps) {
+    if (typeof spec !== "string") { problems.push(`dependency ${JSON.stringify(spec)} is not a string source spec`); continue; }
+    if (!PINNED_SELECTOR.test(spec)) {
+      problems.push(`dependency ${JSON.stringify(spec)} is not an immutable pinned catalog selector <id>@v<x.y.z> — a floating ref, a bare id or a local path resolves differently tomorrow, and a dependency is the SOURCE of bytes in every adopter's closure`);
+    }
+  }
+  const declared = new Set(deps.filter((d) => typeof d === "string"));
+  if (declared.size !== deps.length) problems.push("dependencies repeat a source spec");
+  const missing = PUBLISHED_SELECTORS.filter((s) => !declared.has(s));
+  const unexpected = [...declared].filter((s) => !PUBLISHED_SELECTORS.includes(s));
+  if (missing.length || unexpected.length) {
+    problems.push(
+      `dependencies must be exactly ${JSON.stringify(PUBLISHED_SELECTORS)} (as a set, any order)` +
+      `${missing.length ? `; missing ${JSON.stringify(missing)}` : ""}` +
+      `${unexpected.length ? `; unexpected ${JSON.stringify(unexpected)}` : ""}`,
     );
-  const selectors = catalogSelectors({ root });
-  return { deps, selectors };
-}
-
-/** Rewrite oas-package.json dependencies to the deterministic catalog form.
- * Publication-only; pre-publication CI keeps the local form. */
-export function checkPublishedForm({ root = ROOT } = {}) {
-  const deps = readManifest(root).dependencies;
-  if (!Array.isArray(deps)) throw new Error("oas-package.json has no dependencies array");
-  const same = deps.length === PUBLISHED_FORM.length && deps.every((d, i) => d === PUBLISHED_FORM[i]);
-  if (!same) throw new Error(`dependencies are not the expected published form.\n  found: ${JSON.stringify(deps)}\n  want:  ${JSON.stringify(PUBLISHED_FORM)}`);
-  return { deps, selectors: catalogSelectors({ root, verifySibling: false }) };
-}
-
-export function applyCatalogForm({ root = ROOT, write = true } = {}) {
-  const path = join(root, "oas-package.json");
-  const manifest = JSON.parse(readFileSync(path, "utf8"));
-  const published = Array.isArray(manifest.dependencies) && manifest.dependencies.length === PUBLISHED_FORM.length
-    && manifest.dependencies.every((d, i) => d === PUBLISHED_FORM[i]);
-  const selectors = catalogSelectors({ root, verifySibling: !published });
-  manifest.dependencies = selectors;
-  const text = JSON.stringify(manifest, null, 2) + "\n";
-  if (write) writeFileSync(path, text);
-  return { selectors, text };
+  }
+  return problems;
 }
 
 if (resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1] || "")) {
   const mode = process.argv[2] || "--check";
   try {
     if (mode === "--check") {
-      const deps = readManifest(ROOT).dependencies;
-      if (Array.isArray(deps) && deps.every((d, i) => d === PUBLISHED_FORM[i]) && deps.length === PUBLISHED_FORM.length) {
-        const { selectors } = checkPublishedForm();
-        console.log("published catalog form OK:", JSON.stringify(selectors));
-      } else {
-        const { deps: local, selectors } = checkLocalForm();
-        console.log("pre-publication local form OK:", JSON.stringify(local));
-        console.log("deterministic catalog replacement:", JSON.stringify(selectors));
+      const problems = publishedSelectorProblems();
+      if (problems.length) {
+        console.error(`catalog-selectors: the shipped manifest is not in published form:\n- ${problems.join("\n- ")}`);
+        process.exit(1);
       }
+      console.log("published catalog form OK:", JSON.stringify(readManifest().dependencies));
     } else if (mode === "--print") {
-      console.log(catalogSelectors({ verifySibling: false }).join("\n"));
-    } else if (mode === "--apply") {
-      const { selectors } = applyCatalogForm();
-      console.log("applied catalog selectors:", JSON.stringify(selectors));
+      console.log(PUBLISHED_SELECTORS.join("\n"));
     } else {
-      console.error(`unknown mode ${mode} (use --check | --print | --apply)`);
+      console.error(`unknown mode ${mode} (use --check | --print)`);
       process.exit(2);
     }
   } catch (e) {
