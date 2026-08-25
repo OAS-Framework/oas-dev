@@ -89,7 +89,7 @@
  * because it builds their environment rather than inheriting one (see
  * `childEnv`).
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -118,6 +118,129 @@ export function inventorySuites(dir, root = ROOT) {
     else if (entry.name.endsWith(".test.mjs")) out.push(normalize(relative(root, path)));
   }
   return out.sort();
+}
+
+// ─────────────────────────────────────────────────── coverage: nothing left out
+/**
+ * THE INVENTORY IS A DENY-LIST TOO, AND THAT IS THE HOLE THIS CLOSES.
+ *
+ * `inventorySuites` collects `test/**\/*.test.mjs`. Node's own discovery is much
+ * wider, so a file this gate never names can still be a file a developer wrote
+ * as a suite and reasonably believes is running:
+ *
+ *   test/legacy.test.js      wrong EXTENSION — discoverable, never inventoried
+ *   lib/parser.test.mjs      right extension, wrong DIRECTORY
+ *   test/parser_test.mjs     a naming convention node honours and we do not
+ *   test/suites -> ../extra  a symlinked directory readdir reports as a LINK,
+ *                            so the recursion skips the whole subtree
+ *
+ * Each one is silent: `npm test` passes, prints a suite count that looks right,
+ * and the file never executes. That is worse than a red gate, because it is
+ * indistinguishable from green.
+ *
+ * So the repository is walked and every file NODE would treat as a test must be
+ * in the inventory. The rule mirrors node --test discovery:
+ *
+ *   NAME       *.test.{js,cjs,mjs}, *-test.…, *_test.…, test-*.…, test.…
+ *   DIRECTORY  any .js/.cjs/.mjs file inside a directory named `test`
+ *
+ * ONE EXEMPTION, deliberately: a `.mjs` file under `test/` whose NAME matches
+ * none of the patterns is a helper module (`test/helpers/build-fixture.mjs`).
+ * Node would import it under bare discovery, but this gate never uses bare
+ * discovery — it names argv — so a helper simply never runs, which is correct.
+ * The exemption is extension-specific: `.js`/`.cjs` under `test/` cannot be
+ * inventoried at all and is refused rather than quietly excluded.
+ *
+ * EXCLUDED FROM THE SCAN, and why each:
+ *
+ *   node_modules/                  not our source; installed trees legitimately
+ *                                  carry thousands of their own test files
+ *   .git/                          git internals
+ *   agents/<soul>/instances/<id>/  ANOTHER INSTANCE'S CHECKOUT — gitignored, at
+ *                                  whatever revision that instance is on. These
+ *                                  are the exact trees this gate exists to keep
+ *                                  out of the run (see the header); failing on
+ *                                  them would make the gate red on every
+ *                                  machine that has a live instance.
+ *
+ * The list is closed and short on purpose. Anything else discoverable is either
+ * inventoried or reported.
+ */
+const TEST_FILE_NAME = /^(?:.+\.test|.+-test|.+_test|test-.+|test)\.(?:js|cjs|mjs)$/;
+const SCRIPT_EXTENSION = /\.(?:js|cjs|mjs)$/;
+const HELPER_UNDER_TEST = /\.mjs$/;
+
+/** Directory names never walked, wherever they appear. */
+export const DISCOVERY_EXCLUDED_DIRS = new Set(["node_modules", ".git"]);
+
+/** True for `agents/<soul>/instances/...` — another instance's checkout. */
+const isNestedInstance = (segments) =>
+  segments[0] === "agents" && segments.length > 2 && segments[2] === "instances";
+
+/** Repository-relative paths of every file, minus the exclusions above.
+ * @returns {{files: string[], problems: string[]}} problems are symlinked
+ *   directories under test/, refused rather than followed. */
+function walkRepository(root) {
+  const files = [];
+  const problems = [];
+  const visit = (dir, prefix) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }   // unreadable directory: nothing to inventory in it
+    for (const entry of entries) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const segments = rel.split("/");
+      if (DISCOVERY_EXCLUDED_DIRS.has(entry.name)) continue;
+      if (isNestedInstance(segments)) continue;
+      const path = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        // FAIL CLOSED, the way the released kernel treats a symlinked package
+        // resource. A symlinked DIRECTORY is skipped by readdir-based recursion
+        // — including inventorySuites' — so every suite under it disappears
+        // from the run while the tree still looks populated to a reader.
+        let target;
+        try { target = statSync(path); } catch { continue; }   // broken link: nothing to run
+        if (target.isDirectory() && segments[0] === "test") {
+          problems.push(
+            `symlinked directory ${JSON.stringify(rel)} under test/ — the suite inventory is built with readdir, ` +
+            "which reports a link rather than a directory, so every suite beneath it would silently never run. " +
+            "Refused rather than followed: move the suites into test/ or name them individually.",
+          );
+        }
+        continue;
+      }
+      if (entry.isDirectory()) { visit(path, rel); continue; }
+      files.push(rel);
+    }
+  };
+  visit(root, "");
+  return { files, problems };
+}
+
+/**
+ * Files node --test would discover that this gate would never run.
+ * @param {string[]} inventory the suite paths the gate is about to name
+ * @returns {string[]} problems; empty means the inventory covers everything
+ */
+export function coverageProblems(inventory, root = ROOT) {
+  const named = new Set(inventory.map(normalize));
+  const { files, problems } = walkRepository(root);
+  for (const rel of files) {
+    if (named.has(rel)) continue;
+    const segments = rel.split("/");
+    const base = segments[segments.length - 1];
+    const underTest = segments[0] === "test" && segments.length > 1;
+    const discoverable = TEST_FILE_NAME.test(base) || (underTest && SCRIPT_EXTENSION.test(base));
+    if (!discoverable) continue;
+    if (underTest && HELPER_UNDER_TEST.test(base) && !TEST_FILE_NAME.test(base)) continue;  // helper module
+    problems.push(
+      `${JSON.stringify(rel)} is a file \`node --test\` DISCOVERS but this gate never runs — the inventory is ` +
+      `test/**/*.test.mjs, and nothing else reaches the command. A suite that never executes is worse than a ` +
+      `failing one, because green looks identical either way. Rename it to test/<name>.test.mjs (or, if it is not ` +
+      `a suite, give it a name node does not treat as one).`,
+    );
+  }
+  return problems;
 }
 
 /**
@@ -243,7 +366,7 @@ export function childEnv(source) {
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   const inventory = inventorySuites(join(ROOT, "test"));
-  const problems = checkScripts(pkg, inventory, process.env);
+  const problems = [...checkScripts(pkg, inventory, process.env), ...coverageProblems(inventory, ROOT)];
   if (problems.length) {
     process.stderr.write(`Test-script check failed:\n- ${problems.join("\n- ")}\n`);
     process.exit(1);

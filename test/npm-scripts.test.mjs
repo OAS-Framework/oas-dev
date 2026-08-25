@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import test from "node:test";
 import {
-  ROOT, canonicalScripts, checkScripts, childEnv, inventoryProblems, inventorySuites,
+  ROOT, canonicalScripts, checkScripts, childEnv, coverageProblems, inventoryProblems, inventorySuites,
 } from "../scripts/check-test-scripts.mjs";
 
 /**
@@ -242,6 +242,115 @@ test("the inventory equals the suites on disk, so a new suite cannot go unrun", 
   assert.ok(onDisk.length > 0, "there must be suites to run");
   // And this very file is one of them, so the gate is running its own guards.
   assert.ok(onDisk.includes("test/npm-scripts.test.mjs"));
+});
+
+// ---------------------------------------------------------------------------
+// COVERAGE: a file node WOULD discover that the gate would never run.
+//
+// The inventory is `test/**/*.test.mjs` and nothing else reaches the command,
+// so every other spelling node treats as a test is a suite that silently never
+// executes — green looks identical either way.
+// ---------------------------------------------------------------------------
+
+/** A throwaway tree with the given files (contents are irrelevant here). */
+function tree(t, paths, links = []) {
+  const root = mkdtempSync(join(tmpdir(), "oas-dev-coverage-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const path of paths) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), "// fixture\n");
+  }
+  for (const [linkPath, target] of links) {
+    mkdirSync(dirname(join(root, linkPath)), { recursive: true });
+    symlinkSync(join(root, target), join(root, linkPath));
+  }
+  return root;
+}
+
+test("this repository's own tree is fully covered by the inventory", () => {
+  // The live assertion: whatever is on disk right now, nothing node would run
+  // is left out of the command the gate builds.
+  assert.deepEqual(coverageProblems(inventory(), ROOT), []);
+});
+
+for (const [label, path] of [
+  ["a .test.js beside the suites", "test/legacy.test.js"],
+  ["a .test.cjs beside the suites", "test/legacy.test.cjs"],
+  ["a .test.mjs OUTSIDE test/", "lib/parser.test.mjs"],
+  ["a .test.js at the repository root", "foo.test.js"],
+  ["node's dash convention", "test/parser-test.mjs"],
+  ["node's underscore convention", "test/parser_test.mjs"],
+  ["node's test- prefix convention", "test/test-parser.mjs"],
+  ["a bare test.mjs in a source directory", "scripts/test.mjs"],
+]) {
+  test(`coverage guard reports ${label}`, (t) => {
+    const root = tree(t, ["test/alpha.test.mjs", path]);
+    const problems = coverageProblems(["test/alpha.test.mjs"], root);
+    assert.equal(problems.length, 1, `MUST be reported — ${label}: ${path}\n${problems.join("\n")}`);
+    assert.match(problems[0], /DISCOVERS but this gate never runs/);
+    assert.ok(problems[0].includes(path), problems[0]);
+  });
+}
+
+test("coverage guard leaves ordinary files, helper modules and excluded trees alone", (t) => {
+  // Non-vacuity in every direction the exclusion list claims. A rule this broad
+  // has to be shown NOT firing, or it is indistinguishable from "fail always".
+  const root = tree(t, [
+    "test/alpha.test.mjs",
+    "test/nested/beta.test.mjs",
+    "test/helpers/build-fixture.mjs",             // a helper module, not a suite
+    "test/fixtures/child-oas-config.yaml",        // fixture DATA
+    "scripts/validate-manifests.mjs",             // ordinary source
+    "README.md",
+    "node_modules/some-dep/index.test.js",        // installed tree
+    "node_modules/some-dep/test/thing.js",
+    ".git/hooks/pre-commit.mjs",
+    // Another instance's checkout: gitignored, at another revision, and the
+    // exact tree this gate exists to keep OUT of the run.
+    "agents/oas-dev-expert/instances/x/work/test/stale.test.mjs",
+  ]);
+  assert.deepEqual(coverageProblems(["test/alpha.test.mjs", "test/nested/beta.test.mjs"], root), []);
+});
+
+test("coverage guard REFUSES a symlinked directory under test/", (t) => {
+  // readdir reports a link, not a directory, so inventorySuites' recursion
+  // skips the whole subtree: every suite under it disappears from the run while
+  // the tree still looks populated. Fail closed, as the kernel does for a
+  // symlinked package resource.
+  const root = tree(t, ["test/alpha.test.mjs", "extra/gamma.test.mjs"], [["test/suites", "extra"]]);
+  // First: prove the hole is real — the inventory does NOT see the linked tree.
+  assert.deepEqual(inventorySuites(join(root, "test"), root), ["test/alpha.test.mjs"],
+    "the inventory must really miss a symlinked directory, or refusing one proves nothing");
+  const problems = coverageProblems(inventorySuites(join(root, "test"), root), root);
+  assert.ok(problems.some((p) => /symlinked directory "test\/suites" under test\//.test(p)),
+    problems.join("\n"));
+  // The link's TARGET is reported on its own too — it is an uninventoried suite
+  // wherever it sits, and the two findings are independent.
+  assert.ok(problems.some((p) => p.includes("extra/gamma.test.mjs")), problems.join("\n"));
+});
+
+test("the coverage guard runs INSIDE the gate, not only in this suite", (t) => {
+  // Enforcement has to live outside the test run: a selection flag can exclude
+  // the assertion that would report the defect. So the end-to-end fixture plants
+  // an out-of-inventory suite and the real gate must refuse before anything runs.
+  const repo = fixtureRepo(t);
+  writeFileSync(join(repo.root, "foo.test.js"), "// discoverable, never inventoried\n");
+  const run = repo.runGate();
+  assert.equal(run.status, 1, run.stdout);
+  assert.match(run.stderr, /DISCOVERS but this gate never runs/);
+  assert.ok(run.stderr.includes("foo.test.js"), run.stderr);
+  assert.deepEqual(repo.ran(), [], "nothing may run while a discoverable suite is outside the inventory");
+});
+
+test("the gate also refuses a symlinked suite directory end to end", (t) => {
+  const repo = fixtureRepo(t);
+  mkdirSync(join(repo.root, "extra"), { recursive: true });
+  writeFileSync(join(repo.root, "extra", "gamma.test.mjs"), "// never reached\n");
+  symlinkSync(join(repo.root, "extra"), join(repo.root, "test", "suites"));
+  const run = repo.runGate();
+  assert.equal(run.status, 1, run.stdout);
+  assert.match(run.stderr, /symlinked directory/);
+  assert.deepEqual(repo.ran(), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -518,7 +627,31 @@ test("childEnv matches denied names case-insensitively", () => {
 });
 
 test("childEnv drops __proto__ instead of setting a prototype", () => {
-  const env = childEnv({ ["__proto__"]: "x", KEEP: "y" });
+  // MUTATION-SENSITIVE, and it was not.
+  //
+  // The previous fixture passed `{ ["__proto__"]: "x" }`. Deleting the guard
+  // makes that do `env["__proto__"] = "x"` — and assigning a PRIMITIVE to
+  // __proto__ is a silent no-op: the prototype does not change and no own
+  // property appears, so the assertions held with the guard removed. The test
+  // was green either way, which is the same as having no test.
+  //
+  // An OBJECT value is what makes the assignment bite. JSON.parse produces a
+  // genuine own "__proto__" data property (an object literal would not), so
+  // this is also the shape a hostile environment dump would actually have.
+  const source = JSON.parse('{"__proto__": {"polluted": "yes"}, "KEEP": "y"}');
+  assert.ok(Object.hasOwn(source, "__proto__"), "the fixture must carry a real own __proto__ property");
+
+  const env = childEnv(source);
   assert.deepEqual(env, { KEEP: "y" });
-  assert.equal(Object.getPrototypeOf(env), Object.prototype);
+  assert.equal(Object.getPrototypeOf(env), Object.prototype,
+    "without the guard, assigning this value would REPLACE the child environment's prototype");
+  assert.equal(env.polluted, undefined,
+    "and the child would then inherit a variable nobody set — invisible to Object.keys, visible to a lookup");
+  assert.equal(Object.hasOwn(env, "__proto__"), false);
+  assert.equal({}.polluted, undefined, "nothing may have reached Object.prototype");
+
+  // The guard is per-object, so the primitive spelling must be handled too.
+  const primitive = childEnv(JSON.parse('{"__proto__": "x", "KEEP": "y"}'));
+  assert.deepEqual(primitive, { KEEP: "y" });
+  assert.equal(Object.hasOwn(primitive, "__proto__"), false);
 });
