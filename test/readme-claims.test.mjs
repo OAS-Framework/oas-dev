@@ -12,12 +12,21 @@ import { fileURLToPath } from "node:url";
  *
  * So each one is pinned here against the artifact it describes:
  *
- *   trust posture      → the dependency capability manifests' own commands/hooks
- *                        (read from the released v2 leaf tags via the pins
- *                        below), plus what the probe observes live in check 7
- *   catalog override   → the kernel's documented REPLACE (not merge) semantics
- *                        and this package's own dependency selectors
+ *   trust posture      → oas.review's own manifest for the exemption, and a
+ *                        NAMED expectation for the two executable dependencies
+ *   catalog override   → this package's own dependency selectors, read from the
+ *                        manifest, plus the kernel's REPLACE (not merge)
+ *                        semantics
  *   what changed       → the manifests in this repository
+ *
+ * WHAT THIS SUITE CANNOT DO, stated so nobody reads it as more than it is: it
+ * runs offline, so it cannot look inside the released oas.okf / oas.aweb
+ * artifacts. The list of executable dependencies below is therefore an
+ * EXPECTATION, not a measurement. The measurement is the consumer probe, which
+ * reads each capability's executable surface out of the `oas trust` result it
+ * just received and requires the README to document `oas trust <id>` for every
+ * one the run actually had to approve. Offline: the claim is present and
+ * specific. Online: the claim is true.
  *
  * The install-spelling half of the README lives in
  * test/readme-install-sources.test.mjs; this suite deliberately does not repeat
@@ -48,13 +57,15 @@ const SPELLINGS = "## Install spellings the released kernel accepts";
 const CHANGED = "## What changed in 2.0.0";
 
 /**
- * The EXECUTABLE dependencies of this package's closure, and what each declares.
- * Read from the released leaf tags rather than restated: `oas.okf@v2.0.0`
- * exports a capability with a command namespace, a `harvest` command and two
- * lifecycle hooks; `oas.aweb@v2.0.0` exports one with commands and required
- * spawn/retire hooks. Both are proved live by consumer-probe check 7 ("the
- * executable dependencies ARE gated"), which trusts each one and asserts the
- * approval binds to that capability's own artifact integrity.
+ * The EXECUTABLE dependencies of this package's closure.
+ *
+ * `oas.okf@v2.0.0` exports a capability with the `okf` command namespace, a
+ * `harvest` command and `soul-scaffold` + `spawn` hooks; `oas.aweb@v2.0.0`
+ * exports one with commands and REQUIRED spawn/retire hooks. Neither manifest is
+ * readable from here — see the header — so this list is the expectation the
+ * consumer probe verifies against the live artifacts in check 7 ("the executable
+ * dependencies ARE gated"), which trusts each one and asserts the approval binds
+ * to that capability's own artifact integrity.
  */
 const EXECUTABLE_DEPENDENCIES = ["oas.okf", "oas.aweb"];
 
