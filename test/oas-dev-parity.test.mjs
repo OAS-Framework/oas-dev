@@ -181,9 +181,16 @@ test("delta: released package provenance flows through oas.dev catalog selectors
  *
  * So the claim is derived rather than asserted, wherever git can supply the old
  * bytes: the v1 file is read back out of history and hashed here, at test time.
- * The literal stays as the OFFLINE ANCHOR, because a shallow CI checkout has
- * neither the tag nor the base commit, and a test that quietly checked nothing
- * in that case would be the worse outcome.
+ * The literal stays as the OFFLINE ANCHOR, for a checkout that has neither the
+ * tag nor the base commit — a test that quietly checked nothing there would be
+ * the worse outcome.
+ *
+ * WHERE THE DERIVATION ACTUALLY RUNS. It used to run nowhere that mattered: CI
+ * checked out shallow, so the fallback fired on every run and the pipeline only
+ * ever proved that a constant matched itself. The validate job now checks out
+ * with full history and tags, and sets OAS_REQUIRE_PARITY_DERIVATION so the
+ * fallback is a FAILURE there rather than a diagnostic. A local run without the
+ * history still degrades gracefully; a CI run that lost it does not.
  */
 const V1_TEMPLATE_PATH = "oas-package/configs/default/oas-config.yaml";
 const V1_REFS = [
@@ -214,8 +221,16 @@ test("parity of the BYTES: only the template's location moved in the 0.20 restru
   // history rather than taken on trust.
   const derived = V1_REFS.map(([label, ref]) => [label, v1TemplateAt(ref)]).filter(([, bytes]) => bytes);
   if (!derived.length) {
-    t.diagnostic(`git could not supply ${V1_TEMPLATE_PATH} at ${V1_REFS.map(([, r]) => r).join(" or ")} ` +
-      "(shallow checkout, no tags, or no git) — the pinned literal above is standing in for the derivation");
+    const unavailable = `git could not supply ${V1_TEMPLATE_PATH} at ${V1_REFS.map(([, r]) => r).join(" or ")} ` +
+      "(shallow checkout, no tags, or no git)";
+    // In CI the history is fetched on purpose (see the header and
+    // .github/workflows/ci.yml), so the fallback firing means the checkout
+    // changed — and a pipeline that silently stops deriving is exactly the
+    // defect this flag exists to make loud.
+    assert.ok(!process.env.OAS_REQUIRE_PARITY_DERIVATION,
+      `${unavailable} — but OAS_REQUIRE_PARITY_DERIVATION is set, so the pinned literal may not stand in for it. ` +
+      "Restore fetch-depth: 0 (history AND tags) on the validate job's checkout.");
+    t.diagnostic(`${unavailable} — the pinned literal above is standing in for the derivation`);
     return;
   }
   for (const [label, bytes] of derived) {

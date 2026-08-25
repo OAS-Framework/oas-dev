@@ -18,10 +18,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The parity suite DERIVES the shipped template's sha from history: it
+          # reads oas-package/configs/default/oas-config.yaml back out of the
+          # v1.0.0 tag and out of dce83b6 and hashes what git returns. A default
+          # shallow checkout has neither the tag nor the commit, so the suite
+          # fell back to its offline literal and the derivation never ran in CI
+          # at all — the only thing CI proved was that a constant matched
+          # itself. Full history plus tags is what makes the job exercise the
+          # claim PARITY.md actually makes.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Validate manifests, config template, schemas, and README install spellings
+        env:
+          # …and, having paid for the history, REQUIRE the derivation instead of
+          # accepting the fallback. Without this a future checkout change would
+          # silently return the job to comparing a literal with itself.
+          OAS_REQUIRE_PARITY_DERIVATION: "1"
         run: npm test
       # The same three selectors scripts/validate-manifests.mjs imports and
       # enforces, asserted on their own so a manifest that drifts to a floating
