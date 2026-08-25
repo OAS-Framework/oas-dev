@@ -49,8 +49,11 @@ import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readd
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { portabilityLeaks } from "./lib/config-portability.mjs";
+import {
+  RELEASE_TAG, acceptedSpellings, installSourceProblems, installSources, pinnedRef, refusedSpellings,
+} from "./lib/readme-install-sources.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PAYLOAD = join(REPO, "oas-package");
@@ -465,6 +468,122 @@ check("the kernel under test is NOT whatever `oas` the PATH resolves", () => {
   equal(viaPath.status, 90, "the PATH `oas` must refuse, not answer");
   rmSync(UNEXPECTED, { force: true }); // that refusal was deliberate; baseline it out
   return `absolute ${KERNEL}; PATH oas = refusing stub`;
+});
+
+// ──────────────────────────── documentation and schemas, against the real kernel
+step("1b. what the README tells consumers to type, and what this repo vendored — checked against the released kernel itself");
+
+/** The unpacked kernel's own root: its `lib/` is the parser this package's
+ * documentation must satisfy, and its `docs/` is where the vendored schemas
+ * came from. Derived from the bin we are actually driving, so an
+ * OAS_PROBE_CLI override is checked against ITS kernel, never against a
+ * differently-versioned one that happens to be installed. */
+const KERNEL_ROOT = resolve(dirname(KERNEL), "..");
+
+/**
+ * Parse specs with the RELEASED kernel's own `parsePackageSource`, in a CHILD
+ * process.
+ *
+ * Not imported into this process on purpose: the probe's whole claim is that
+ * it drives a kernel it did not build, and loading kernel modules into the
+ * harness that judges them blurs exactly that line — a module-level side
+ * effect would then be running inside the judge. The child gets the same
+ * constructed environment every other kernel call gets.
+ */
+function parseSources(specs) {
+  const script = join(sandbox, "parse-package-sources.mjs");
+  writeFileSync(script, [
+    `import { parsePackageSource } from ${JSON.stringify(pathToFileURL(join(KERNEL_ROOT, "lib", "core.mjs")).href)};`,
+    "const out = [];",
+    "for (const spec of process.argv.slice(2)) {",
+    "  try { out.push({ spec, parsed: parsePackageSource(spec) }); }",
+    "  catch (error) { out.push({ spec, error: { code: error.code, message: error.message } }); }",
+    "}",
+    "process.stdout.write(JSON.stringify(out));",
+    "",
+  ].join("\n"));
+  const run = spawnSync(process.execPath, [script, ...specs], { encoding: "utf8", env: childEnv({ PATH: PROBE_PATH }) });
+  if (run.status !== 0) throw new Error(`the kernel's own parser could not be invoked (${run.status}):\n${run.stdout}${run.stderr}`);
+  return JSON.parse(run.stdout);
+}
+
+const README_TEXT = readFileSync(join(REPO, "README.md"), "utf8");
+
+check("the README's install spellings satisfy the offline pinning rules", () => {
+  // Same predicate the offline suite runs. Repeated here so a probe run is a
+  // complete answer on its own: the parser checks below prove a spelling is
+  // ACCEPTED, and an accepted spelling can still install last year's package.
+  const problems = installSourceProblems(README_TEXT);
+  assert(problems.length === 0, `README install spellings are unsound:\n  - ${problems.join("\n  - ")}`);
+  return `${acceptedSpellings(README_TEXT).length} tabled + ${installSources(README_TEXT).length} runnable, all pinned to ${RELEASE_TAG}`;
+});
+
+check("every spelling the README documents is ACCEPTED by the released kernel's own parser", () => {
+  const documented = [
+    ...acceptedSpellings(README_TEXT).map(({ spelling, line }) => ({ spec: spelling, where: `spelling table, README:${line}` })),
+    ...installSources(README_TEXT).map(({ source, line }) => ({ spec: source, where: `command, README:${line}` })),
+  ];
+  const byWhere = new Map(documented.map(({ spec, where }) => [spec, where]));
+  const rows = [];
+  for (const { spec, parsed, error } of parseSources([...new Set(documented.map((d) => d.spec))])) {
+    const where = byWhere.get(spec);
+    if (error) throw new Error(`${where}: the kernel REFUSES ${JSON.stringify(spec)} — ${error.code}: ${error.message}`);
+    assert(["catalog", "git", "path"].includes(parsed.kind), `${where}: ${JSON.stringify(spec)} parsed as an unknown kind ${JSON.stringify(parsed.kind)}`);
+    // A spelling that claims a pin must actually carry it into the parse — the
+    // README's whole selector argument rests on the kernel seeing "v2.0.0".
+    const pin = pinnedRef(spec);
+    if (pin) {
+      const carried = parsed.kind === "catalog" ? parsed.selector : parsed.ref;
+      equal(carried, pin, `${where}: ${JSON.stringify(spec)} documents a ${RELEASE_TAG} pin the parser did not receive`);
+    }
+    if (parsed.kind === "git") assert(/^https:\/\/github\.com\/OAS-Framework\/oas-dev\.git$/.test(parsed.url), `${where}: ${JSON.stringify(spec)} resolves to ${parsed.url}, not this package's repository`);
+    if (parsed.kind === "catalog") assert(/^oas\.(dev|jira)$/.test(parsed.id), `${where}: unexpected catalog id ${JSON.stringify(parsed.id)}`);
+    rows.push(`${parsed.kind}:${spec}`);
+  }
+  return `${rows.length} spelling(s) accepted`;
+});
+
+check("every spelling the README documents as REFUSED is refused, with invalid-source", () => {
+  const refused = refusedSpellings(README_TEXT);
+  assert(refused.length >= 2, "the README must name both of the lock's normalized spellings as refused");
+  const rows = [];
+  for (const { spec, parsed, error } of parseSources(refused.map((r) => r.spelling))) {
+    assert(!parsed, `the README says ${JSON.stringify(spec)} is refused, but the kernel ACCEPTED it as ${JSON.stringify(parsed)}`);
+    equal(error.code, "invalid-source", `${JSON.stringify(spec)} was refused with an unexpected code`);
+    rows.push(`${spec} → ${error.code}`);
+  }
+  return rows.join("; ");
+});
+
+check(`the released ${KERNEL_VERSION} bundled catalog still names oas.dev v1.0.0 — why the README pins a selector`, () => {
+  // The README's central install claim is that `oas.dev` alone installs v1 and
+  // only `oas.dev@v2.0.0` installs this release. That is a fact about THIS
+  // kernel's shipped catalog, so it is read from the kernel rather than
+  // asserted in prose that nothing rechecks.
+  const bundled = readJson(join(KERNEL_ROOT, "package-catalog.json"));
+  const entry = bundled.packages["oas.dev"];
+  assert(entry, "the released kernel's bundled catalog has no oas.dev entry at all");
+  equal(entry.path, "oas-package", "the bundled catalog's contained package root");
+  equal(bundled.capabilities["oas.review"], "oas.dev", "the bundled catalog must alias the exported capability to this package");
+  assert(entry.ref !== `v${PACKAGE_MANIFEST.version}`,
+    `the bundled catalog now names ${entry.ref} — it has been refreshed to this release, so the README's "a bare oas.dev installs v1" paragraph is stale and must be rewritten`);
+  return `bundled ref ${entry.ref}; selector override required for v${PACKAGE_MANIFEST.version}`;
+});
+
+check("the vendored schemas are byte-identical to the published kernel's docs/", () => {
+  // SCHEMA-STATUS.md claims provenance; this is that claim, executed. The
+  // validator gates every manifest and the config template against these
+  // files, so a drifted copy would gate against a contract nobody published.
+  const rows = [];
+  for (const name of readdirSync(join(REPO, "schemas")).sort()) {
+    const mine = readFileSync(join(REPO, "schemas", name));
+    const theirs = join(KERNEL_ROOT, "docs", name);
+    assert(existsSync(theirs), `${name} is vendored here but absent from the published kernel's docs/ — it has no provenance`);
+    equal(sha256(mine), sha256(readFileSync(theirs)), `schemas/${name} has drifted from the published kernel's copy`);
+    rows.push(`${name}=${sha256(mine).slice(0, 8)}`);
+  }
+  assert(rows.length >= 3, "the schemas/ directory must hold the vendored package, capability and lock schemas");
+  return rows.join(" ");
 });
 
 // ───────────────────────────────────────────────────── synthetic catalog

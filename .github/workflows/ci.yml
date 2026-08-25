@@ -10,13 +10,81 @@ permissions:
 
 jobs:
   validate-and-test:
+    # OFFLINE. The gate-and-runner (scripts/check-test-scripts.mjs) rebuilds the
+    # canonical scripts block, refuses anything else, then runs manifest
+    # validation and exactly the suites under test/ as argv — no shell, no bare
+    # discovery. Nothing here touches the network, so a registry outage can
+    # never turn this job amber.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Validate manifests and run unit tests
+      - name: Validate manifests, config template, schemas, and README install spellings
         run: npm test
-      - name: Consumer probe status
-        run: echo "PENDING(released-0.19.0-fixtures; package-runtime-api.md Consumer fixture) acquire -> lock -> trust -> activate -> spawn"
+      - name: Dependency selectors are the published immutable catalog form
+        run: node scripts/catalog-selectors.mjs --check
+
+  consumer-probe:
+    # Drives the PUBLISHED @oas-framework/oas kernel at this package's declared
+    # compatibility floor, in a throwaway sandbox: schema provenance -> README
+    # install spellings against the kernel's own parser -> dependency closure in
+    # both directions -> pinned-Git acquisition -> `oas init --package` template
+    # adoption -> exact restore -> trust -> agent types and the nested oas/
+    # override -> scaffold-only spawn/retire -> the v1-lock cutover refusal.
+    #
+    # Two reasons it is its own job. It needs the npm registry (the kernel
+    # download), and — unlike a leaf package's probe — it needs the FIVE
+    # official leaf repositories at their immutable v2 tags, because oas.dev is
+    # a PROFILE package whose value is a dependency closure. They are checked
+    # out beside this repository and served to the kernel as local `file://`
+    # bare clones, so the probe itself stays hermetic.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: oas-dev
+          # `git clone --bare` refuses a shallow source, and the probe clones
+          # this checkout to pin its own HEAD in the synthetic catalog.
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-okf
+          ref: v2.0.0
+          path: oas-okf
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-aweb
+          ref: v2.0.0
+          path: oas-aweb
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-authoring
+          ref: v2.0.0
+          path: oas-authoring
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-jira
+          ref: v2.0.0
+          path: oas-jira
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: OAS-Framework/oas-linear
+          ref: v2.0.0
+          path: oas-linear
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Consumer probe against the released OAS kernel
+        working-directory: oas-dev
+        env:
+          # The probe pins the leaf commits itself and verifies each v2.0.0 tag
+          # resolves to them; this only says WHERE the repositories are.
+          OAS_PROBE_WORKSPACE: ${{ github.workspace }}
+        run: npm run probe

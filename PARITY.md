@@ -6,14 +6,27 @@ editable snapshot at a non-Git development workspace root, its resolved behavior
 historical `oas-config.yaml` for the existing `framework-authors` and
 `developers` families, then adds the approved `package-maintainers` extensions.
 
-It is the **complete setup artifact**: `oas init --package oas.dev` acquires and
-locks the closure, validates this profile against the closure providers, and
-snapshots it whole as the root `oas-config.yaml`; a bare `oas install` then
-reconciles. There is no manual post-adoption assembly. A closer child-repo
-config exists only for truly repo-specific policy (the framework injection),
-never to reconstruct common OAS development policy. The end-to-end sequence is
-exercised by `scripts/consumer-probe.mjs` (live, released kernel) and
-`test/oas-dev-consumer.test.mjs` (structural, today).
+It is the **complete setup artifact**: `oas init --package oas.dev@v2.0.0`
+acquires and locks the closure, validates this profile against the closure
+providers, and snapshots it whole as the root `oas-config.yaml`; a bare
+`oas install` then reconciles. There is no manual post-adoption assembly. A
+closer child-repo config exists only for truly repo-specific policy (the
+framework injection), never to reconstruct common OAS development policy. The
+end-to-end sequence is exercised by `scripts/consumer-probe.mjs` (live, released
+kernel) and `test/oas-dev-consumer.test.mjs` (structural, today).
+
+## In 2.0.0 the profile MOVED; it did not CHANGE
+
+The 0.20 contract requires a package's config templates to live under
+`config-templates/`, so the file this document argues about now ships at
+`oas-package/config-templates/default/oas-config.yaml`. Those are the same bytes
+that shipped from `configs/default/oas-config.yaml` at the v1.0.0 tag: the
+parity suite pins the template's sha256 and additionally asserts that the
+abandoned `configs/` root is gone, so no adopter can reach the old copy and no
+edit can hide inside a restructure. Every parity claim below is therefore
+inherited from v1.0.0 unchanged. The one thing 2.0.0 does change is *provenance*
+— delta 4 — because the dependency selectors that supply the providers moved to
+the v2 leaf tags.
 
 Parity is proven mechanically by `test/oas-dev-parity.test.mjs`, which resolves
 three fixtures with a dependency-free config reader and compares the effective
@@ -23,7 +36,8 @@ per-family view:
   baseline (the framework repo's historical config; the deployment-local team id
   is omitted, and messaging is not declared because it came from the laptop's
   outer config).
-- `configs/default/oas-config.yaml` — the shipped portable root profile.
+- `oas-package/config-templates/default/oas-config.yaml` — the shipped portable
+  root profile.
 - `test/fixtures/framework-child-oas-config.yaml` — the closer override the
   `oas/` repo keeps after migration.
 
@@ -60,8 +74,11 @@ authors, review → developers, worktree work-mode, and the
    to both `oas.authoring` and `oas.review`.
 4. **Released package provenance** — providers resolve `from: installed` from the
    workspace's installed **released** closure (oas.dev's catalog dependency
-   selectors `oas.okf@…`, `oas.aweb@…`, `oas.authoring@…`), not the framework's
-   bundled in-repo capabilities.
+   selectors, `oas.okf@v2.0.0`, `oas.aweb@v2.0.0` and `oas.authoring@v2.0.0` in
+   this release), not the framework's bundled in-repo capabilities. The template
+   binds capability IDs, which do not change with the selector, so moving the
+   pins from the v1 tags to the v2 tags is a provenance change and not a policy
+   change — the resolved per-family view is identical either way.
 
 ## Layering rule (why the injection stays in the child `oas/` config)
 
