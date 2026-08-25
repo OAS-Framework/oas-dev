@@ -381,6 +381,128 @@ test("…and the URL exemption itself still holds, punctuation and tildes includ
   }
 });
 
+test("EVERY URL-span boundary hands the text after it back to the token scan", () => {
+  // The parity the two character sets are supposed to have, executed instead of
+  // asserted in a comment — which is how the caret slipped through. A URL span
+  // ends at each character below; TOKEN_SPLIT must then separate the residual
+  // path from whatever boundary is glued to its front, or the token that comes
+  // back (`^/Users/x`) classifies as nothing at all and the leak is laundered by
+  // the link in front of it.
+  //
+  // `\` is the deliberate exception, and it is exempt in the SOUND direction:
+  // TOKEN_SPLIT must NOT split it (it lives inside `C:\Users\me` and
+  // `\\server\share`), and the residual `\/Users/x` is still classified — as a
+  // Windows root-relative path. Flagged either way, which is all this asserts.
+  for (const boundary of [" ", "\t", '"', "'", "`", "(", ")", "{", "}", "[", "]", "<", ">", ",", ";", "|", "\\", "^"]) {
+    const carrier = `https://example.test/a${boundary}/Users/alice/private.yaml`;
+    assert.ok(localPathIn(carrier),
+      `MUST be flagged — a URL span ending at ${JSON.stringify(boundary)} left an unclassifiable token: ${JSON.stringify(carrier)}`);
+    assert.ok(commentLeaks(`# see ${carrier}`).length,
+      `MUST be flagged as a comment too — boundary ${JSON.stringify(boundary)}: ${carrier}`);
+  }
+});
+
+test("…and NO other character ends a span, so a parameterized link stays portable", () => {
+  // The other half of the same policy, stated in full rather than for `=`/`&`
+  // alone: query, fragment, userinfo, port, percent-escapes and the URL
+  // sub-delims are all INSIDE the span. Terminating at any of them would report
+  // every real documentation link, which is how a gate teaches people to route
+  // around it.
+  for (const inside of ["=", "&", "?", "#", ":", "@", "!", "*", "+", "%", "$", "-", ".", "_", "/"]) {
+    const carrier = `https://example.test/a${inside}/Users/guide`;
+    assert.equal(localPathIn(carrier), undefined,
+      `MUST be portable — ${JSON.stringify(inside)} is URL syntax, not a boundary: ${carrier}`);
+    assert.deepEqual(commentLeaks(`# see ${carrier}`), [],
+      `MUST be portable as a comment too — ${JSON.stringify(inside)}: ${carrier}`);
+  }
+  // The tilde is the one conditional member: `~alice` rides along, `~/` does not.
+  assert.equal(localPathIn("https://example.test/~alice/Users/guide"), undefined);
+  assert.ok(localPathIn("https://example.test/a~/oas/notes.md"));
+});
+
+test("a caret-glued machine path is caught by BOTH surfaces, not just comments", () => {
+  // The exact asymmetry this closes. The comment scan caught it (its identity
+  // markers read the residual text directly), the value scan did not: the URL
+  // span ended at `^` and TOKEN_SPLIT did not split there, so the tokenizer was
+  // handed `^/Users/x/secret` — a string no path form matches.
+  const leaked = "https://example.test/a^/Users/x/secret";
+  assert.ok(valueLeaks({ settings: { path: leaked } }).length,
+    "the VALUE half must see the machine path after the caret");
+  assert.ok(commentLeaks(`# see ${leaked}`).length,
+    "the COMMENT half must keep seeing it");
+  // Non-vacuity: a caret with nothing path-shaped behind it is still portable.
+  assert.deepEqual(valueLeaks({ settings: { path: "https://example.test/a^b" } }), []);
+  assert.deepEqual(commentLeaks("# see https://example.test/a^b"), []);
+});
+
+test("a host environment reference leaks from a comment even INSIDE a URL", () => {
+  // The commentLeaks/valueLeaks asymmetry this closes, in both directions.
+  // `$HOME` is not a path shape whose look-alike a URL can innocently contain —
+  // it is an expansion the adopter's shell performs wherever it sits — so the
+  // URL exemption, which exists for `/home/` and `/Users/` in a documentation
+  // path, does not reach it. valueLeaks always caught this string; commentLeaks
+  // blanked the URL first and reported nothing.
+  for (const [label, comment] of [
+    ["$HOME inside a URL path", "# see https://x/a$HOME/y"],
+    ["${HOME} inside a URL path", "# see https://x/a${HOME}/y"],
+    ["$USER inside a URL path", "# see https://x/a$USER/y"],
+    ["%USERPROFILE% inside a URL path", "# see https://x/a%USERPROFILE%/y"],
+    // …and outside one, which the marker list already covered.
+    ["$HOME in plain prose", "# copy it to $HOME/oas"],
+  ]) {
+    assert.ok(commentLeaks(comment).length, `MUST be flagged — ${label}: ${comment}`);
+    assert.ok(valueLeaks({ settings: { u: comment.replace("# see ", "").replace("# copy it to ", "") } }).length,
+      `the value half must agree — ${label}`);
+  }
+  // Non-vacuity: the env-var NAMESPACE this project actually documents is not a
+  // host reference, and a plain documentation URL is untouched.
+  for (const comment of [
+    "# see https://oas.dev/docs/config",
+    "# $HOMEBREW_PREFIX/bin is not a home reference",
+    "# set $OAS_INSTANCE_HOME_DIR before running",
+  ]) {
+    assert.deepEqual(commentLeaks(comment), [], `MUST NOT be flagged: ${comment}`);
+  }
+});
+
+test("CREDENTIAL_ASSIGNMENT sees a noun GLUED to a compound head", () => {
+  // The five demonstrated misses. `(?:^|[^\w])` required a non-word character in
+  // front of the noun, so every underscore- or hyphen-compounded credential name
+  // shipped clean — while CREDENTIAL_KEY, which reads `_`/`-` as a word
+  // boundary, flagged the very same keys. Two rules over one vocabulary
+  // disagreeing is the gap, not the strictness.
+  for (const text of [
+    "--auth_token=sk-live-leaked",
+    "# my_api_key=sk-live-leaked",
+    "# user_password=hunter2",
+    "# service_secret: shh",
+    "# db_passwd=hunter2",
+    // and the hyphen spelling of the same shape
+    "--client-secret=sk-live-leaked",
+    "# refresh_token: sk-live-leaked",
+  ]) {
+    assert.ok(CREDENTIAL_ASSIGNMENT.test(text), `MUST be flagged: ${text}`);
+    assert.ok(commentLeaks(text).length, `MUST leak as a comment: ${text}`);
+    assert.ok(valueLeaks({ settings: { arg: text } }).length, `MUST leak as a value: ${text}`);
+  }
+  // THE BUDGET VOCABULARY IS UNTOUCHED, which is the whole reason the head guard
+  // exists. It never depended on the prefix — it is a lookbehind on what sits
+  // before the noun — so widening the prefix cannot have widened it.
+  for (const text of [
+    "input_tokens=4096", "output_tokens=512", "max_tokens: 4096",
+    "# total_tokens = 128000", "# cached_tokens=0", "# num_tokens: 12",
+    "# max tokens: 4096", "# token budget: 500", "tokenizer: simple",
+    // A compound whose head is itself compounded still reaches the guard.
+    "# request_max_tokens=4096",
+  ]) {
+    assert.equal(CREDENTIAL_ASSIGNMENT.test(text), false, `MUST NOT be flagged: ${text}`);
+  }
+  // …and the head exempts the PLURAL budget noun only, compound or not.
+  for (const text of ["# input_token=sk-live", "# max_password=hunter2", "# output_secret: shh"]) {
+    assert.ok(CREDENTIAL_ASSIGNMENT.test(text), `a measurement head must not exempt a non-budget noun: ${text}`);
+  }
+});
+
 test("the two surfaces really do have different strictness", () => {
   // Stated as an executable fact rather than a header claim: the SAME text is a
   // leak as a value and documentation as a comment. That asymmetry is the whole

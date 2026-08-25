@@ -31,6 +31,12 @@
  *            way the value half does, so that promise about /home/ URLs holds
  *            in the code and not only in this comment.
  *
+ *            TWO RULES ARE EXEMPT FROM THAT BLANKING, both because a URL is a
+ *            fine place to hide what they look for: the credential assignment
+ *            (`https://host/x?token=sk-live`) and the host environment
+ *            reference (`https://x/a$HOME/y`). Neither is a path shape, so the
+ *            reason the exemption exists does not reach them.
+ *
  * Comments are scanned at all because the kernel ignores them completely and
  * they still land in the adopter's repository word for word. The kernel's
  * supported subset is a FLOOR for this policy, not its definition.
@@ -43,7 +49,8 @@ import { extractComments, parseKernelYaml } from "./kernel-yaml.mjs";
 const FILE_SCHEME = /^file:/i;
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 
-/** Host environment references, wherever they appear inside a value. */
+/** Host environment references, wherever they appear — inside a value, and
+ * inside a comment, including within a URL span (see commentLeaks). */
 const HOST_ENV = /\$\{?(HOME|USER|PWD)\b|%(USERPROFILE|HOMEPATH|USERNAME)%/i;
 
 /** The nouns that NAME a secret. `passw[or]{0,2}ds?` rather than `passwo?rds?`:
@@ -130,9 +137,27 @@ export const CREDENTIAL_KEY = new RegExp(
  * 4096` is a documented setting, not a leaked one, while `--max-password=hunter2`
  * is a leaked one and used to be exempt for exactly the reason corrected above.
  * No tail guard is needed — the assignment operator has to follow the noun
- * immediately, so `token budget: 500` never matched in the first place. */
+ * immediately, so `token budget: 500` never matched in the first place.
+ *
+ * THE NOUN MAY BE GLUED TO A COMPOUND HEAD, and requiring a non-word character
+ * in front of it is what let a family of plain secrets ship. The prefix was
+ * `(?:^|[^\w])`, so every underscore- or hyphen-compounded name was exempt:
+ * `--auth_token=sk-live-…`, `# my_api_key=sk-live-…` and `# user_password=hunter2`
+ * each carry a word character immediately before the noun and were all reported
+ * clean — while the very same keys are flagged by CREDENTIAL_KEY, which reads
+ * `_`/`-` as a word boundary. So an optional `\w+[_-]` head is allowed here too:
+ * `<anything>_token=` is a token being assigned, whatever names it.
+ *
+ * The budget exemption is untouched by that widening, because it never depended
+ * on the prefix — it is the same head LOOKBEHIND, which asks what sits before
+ * the noun rather than what the match consumed. `input_tokens=4096`,
+ * `max_tokens: 4096` and `# total tokens = 128000` stay clean: the budget branch
+ * dies on the lookbehind, and the singular `token` branch then dies on the `s`
+ * that stands between it and the assignment operator. `auth_token=sk-live` has
+ * no such head, so nothing exempts it. */
 export const CREDENTIAL_ASSIGNMENT = new RegExp(
   "(?:^|[^\\w])-{0,2}" +
+  "(?:\\w+[_-])?" +                                      // …or glued to a compound head
   "(?:" +
     `(?<!(?:^|[^A-Za-z0-9])(?:${NON_SECRET_HEAD})[\\s_-])${BUDGET_NOUN}` +
     `|(?:${UNQUALIFIABLE_NOUN})` +
@@ -159,10 +184,29 @@ export const CREDENTIAL_ASSIGNMENT = new RegExp(
  * Each is a comment or value a reviewer reads as "a link, then my home
  * directory", and the scan read as "one long URL". So the span now ends at the
  * PROSE BOUNDARIES — whitespace, quotes, backtick, brackets, parentheses, comma,
- * semicolon, angle brackets, pipe, backslash, caret — the same characters
- * TOKEN_SPLIT already treats as separating a path from surrounding text. `=` and
- * `&` are deliberately NOT boundaries: they are query-string syntax, and
- * terminating there would expose every `?a=1&b=2` to the token scan.
+ * semicolon, angle brackets, pipe, backslash, caret.
+ *
+ * WHAT IS DELIBERATELY NOT A BOUNDARY, in full, because a half-stated policy is
+ * the one that grows a gap. Everything else printable stays INSIDE the span:
+ * `= & ? # : @ ! * + % $ - . _ /` and a `~` not followed by `/`. Each is legal
+ * URL syntax that a reader sees as part of the link — query (`?a=1&b=2`),
+ * fragment (`#section`), userinfo and port (`user@host:8443`), percent-escapes
+ * (`%7E`), and the sub-delims `! * + $`. Terminating at any of them would hand
+ * the tail of an ordinary documentation link to the token scan, and a gate that
+ * reports every parameterized URL is a gate people route around.
+ *
+ * PARITY WITH TOKEN_SPLIT, stated exactly rather than as "the same characters",
+ * which it was called while it was not: every boundary above except `\` is also
+ * a TOKEN_SPLIT separator, and TOKEN_SPLIT additionally separates on `=` and `&`
+ * (it is splitting an already-blanked scalar, where query syntax no longer has a
+ * URL to belong to). The backslash is the one asymmetry and it is required in
+ * that direction: it must END a URL span, or `https://x/a\Users\me` launders a
+ * Windows root-relative path, and it must NOT split a token, or `C:\Users\me`
+ * and `\\server\share` fall apart into fragments no path form recognizes. The
+ * caret used to be the SECOND asymmetry, in the unsound direction — a URL span
+ * ended there and the token scan did not split there, so
+ * `https://example.test/a^/Users/x` handed back the single token
+ * `^/Users/x`, which classifies as nothing at all. TOKEN_SPLIT carries `^` now.
  *
  * The tilde is handled by lookahead rather than as a boundary character, because
  * `~` is legal in a URL path: the span stops before a `~/` SEQUENCE (the
@@ -182,8 +226,10 @@ function withoutPortableUrls(text) {
 
 /** Delimiters that can separate a path from surrounding text. `:` is NOT one —
  * it belongs to a Windows drive letter — and `.` and `@` are not, so an
- * scp-style git remote stays one token. */
-const TOKEN_SPLIT = /[\s"'`(){}\[\]<>,;|=&]+/;
+ * scp-style git remote stays one token. `\` is not one either: it is INSIDE the
+ * Windows path forms nonPortableValue classifies. See URL_SPAN above for the
+ * exact parity between this set and the URL boundary set. */
+const TOKEN_SPLIT = /[\s"'`(){}\[\]<>,;|=&^]+/;
 
 /** An scp-style git remote: `user@host:path`. Its path is REMOTE — including
  * when it is absolute, `git@example.com:/srv/git/repo.git` — so no colon tail
@@ -242,13 +288,18 @@ export function localPathIn(value) {
   return undefined;
 }
 
-/** Markers that identify a PERSON or MACHINE. Applied ONLY to comment text —
- * see the header for why comments are held to a narrower rule than values. */
+/** Markers that identify a PERSON or MACHINE by the shape of a PATH. Applied
+ * ONLY to comment text, and only after complete non-file URL spans have been
+ * blanked — see the header for why comments are held to a narrower rule than
+ * values, and commentLeaks for the one marker that is NOT blanked first.
+ *
+ * The host-environment reference that used to live here (`$HOME`,
+ * `%USERPROFILE%`) has moved out to a raw-text test against HOST_ENV: it is not
+ * a path shape and must not be exempted by a URL. */
 export const IDENTIFYING_MARKERS = [
   [/\/(Users|home)\/[^\s/"']+/, "a user home directory"],
   [/[A-Za-z]:\\Users\\[^\s\\"']+/i, "a Windows user profile directory"],
   [/(^|[\s"'(=])~\//m, "a home-relative (~) path"],
-  [/\$\{?HOME\b|%USERPROFILE%/i, "a host home reference"],
   // A plausible URI path must follow the scheme, or ordinary prose trips it:
   // "edit this file: before use" is not a file URI.
   [/file:(\/\/|\/|[A-Za-z]:)/i, "a file: URI"],
@@ -328,10 +379,25 @@ export function commentLeaks(comments) {
   // `file:` spans are deliberately left in place by withoutPortableUrls: they
   // ARE local paths, and the file: marker below still has to see them.
   const identityText = withoutPortableUrls(text);
-  for (const [pattern, what] of IDENTIFYING_MARKERS) {
-    if (pattern.test(identityText)) {
-      leaks.push(`a comment mentions ${what}; comments are adopted verbatim into other people's deployments`);
-      break;
+  // …WITH ONE EXCEPTION, TESTED FIRST AND AGAINST THE RAW TEXT: a host
+  // environment reference. The URL exemption exists because a URL PATH that
+  // spells `/home/` is somebody's documentation, not somebody's home directory.
+  // `$HOME` is not a path shape at all — it is an expansion the adopter's shell
+  // performs wherever it appears, so `https://x/a$HOME/y` names OUR machine
+  // exactly as much as `/Users/alice` does, and blanking the URL first reported
+  // it clean. valueLeaks has always caught that string, because
+  // nonPortableValue tests HOST_ENV BEFORE the URL exemption; this is the
+  // comment half saying the same thing. Aligning rather than documenting the
+  // gap: a portable link has no business carrying an unexpanded `$HOME`,
+  // `$USER` or `%USERPROFILE%`, so there is no false positive to trade away.
+  if (HOST_ENV.test(text)) {
+    leaks.push("a comment mentions a host environment reference; comments are adopted verbatim into other people's deployments");
+  } else {
+    for (const [pattern, what] of IDENTIFYING_MARKERS) {
+      if (pattern.test(identityText)) {
+        leaks.push(`a comment mentions ${what}; comments are adopted verbatim into other people's deployments`);
+        break;
+      }
     }
   }
   // NOT identityText: the credential scan runs over the ORIGINAL text, because a
