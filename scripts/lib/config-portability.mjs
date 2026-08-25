@@ -43,14 +43,17 @@ const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 /** Host environment references, wherever they appear inside a value. */
 const HOST_ENV = /\$\{?(HOME|USER|PWD)\b|%(USERPROFILE|HOMEPATH|USERNAME)%/i;
 
-/** A key that NAMES a secret. */
-export const CREDENTIAL_KEY = /(^|[_-])(tokens?|secrets?|passwo?rds?|api[_-]?keys?|credentials?)($|[_-])/i;
+/** A key that NAMES a secret. `passw[or]{0,2}ds?` rather than `passwo?rds?`:
+ * the unix spelling `passwd` is at least as likely in a settings key as
+ * `password`, and an adversarial fixture found it missing. A deny heuristic
+ * that only covers the long form is the one that ships a secret. */
+export const CREDENTIAL_KEY = /(^|[_-])(tokens?|secrets?|passw[or]{0,2}ds?|api[_-]?keys?|credentials?)($|[_-])/i;
 
 /** A secret being ASSIGNED, in free text: `api_key: sk-…`, `--api-key=sk-…`,
  * `token=…`. Key-name checking alone misses both a credential smuggled inside
  * an argument string and one sitting in a comment, and a template's comments are
  * copied to the adopter as faithfully as its values. */
-export const CREDENTIAL_ASSIGNMENT = /(^|[^\w])-{0,2}(tokens?|secrets?|passwo?rds?|api[_-]?keys?|credentials?)\s*[:=]/i;
+export const CREDENTIAL_ASSIGNMENT = /(^|[^\w])-{0,2}(tokens?|secrets?|passw[or]{0,2}ds?|api[_-]?keys?|credentials?)\s*[:=]/i;
 
 /** A COMPLETE URL span anywhere inside a scalar. Used to remove portable
  * references before looking for local paths in what remains — the exemption

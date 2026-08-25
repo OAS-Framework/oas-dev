@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -65,8 +66,13 @@ function effective(cfg, family) {
   };
 }
 
+// PARITY IS ABOUT CONTENT, AND THE CONTENT DID NOT CHANGE. The 0.20 restructure
+// moved the template from configs/ to the canonical config-templates/ root and
+// changed nothing inside it — byte for byte the same profile — so every
+// equivalence this suite asserts against the legacy framework config still holds.
+const TEMPLATE = ["config-templates", "default", "oas-config.yaml"];
 const legacy = parseYaml(readRepo("test", "fixtures", "legacy-framework-oas-config.yaml"));
-const profile = parseYaml(read("configs", "default", "oas-config.yaml"));
+const profile = parseYaml(read(...TEMPLATE));
 const child = parseYaml(readRepo("test", "fixtures", "framework-child-oas-config.yaml"));
 // New resolution inside oas/: adopted root profile, with the child repo config
 // as the closer override.
@@ -139,8 +145,22 @@ test("layering: the framework-workspace injection is closer (child repo), never 
 
 test("delta: released package provenance flows through oas.dev catalog selectors, not framework-bundled copies", () => {
   const pkg = JSON.parse(read("oas-package.json"));
-  assert.deepEqual(pkg.dependencies, ["oas.okf@v1.4.1", "oas.aweb@v1.8.0", "oas.authoring@v1.0.0"]);
+  assert.deepEqual(pkg.dependencies, ["oas.okf@v2.0.0", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"]);
   // The profile resolves providers `from: installed` — i.e. from the workspace's
   // installed released closure, not framework-bundled capabilities.
-  assert.match(read("configs", "default", "oas-config.yaml"), /from: installed/);
+  assert.match(read(...TEMPLATE), /from: installed/);
+});
+
+test("parity of the BYTES: only the template's location moved in the 0.20 restructure", () => {
+  // The v1 tag carried this same file at configs/default/oas-config.yaml. If a
+  // future edit changes the profile itself, the parity assertions above are the
+  // ones that must be re-argued — this test pins that the RESTRUCTURE did not.
+  const source = read(...TEMPLATE);
+  assert.equal(
+    createHash("sha256").update(source).digest("hex"),
+    "daf943e7b9bd1a3b9118c4a85cb39fdde1e37ac220ae2f8aabcfe12bc06a3655",
+    "the v2 template must be the v1 profile byte for byte; only its path changed",
+  );
+  // And the abandoned location is really gone, so nothing can adopt the old copy.
+  assert.equal(existsSync(join(ROOT, "configs")), false, "the pre-0.20 configs/ root must not survive");
 });

@@ -13,7 +13,11 @@ import {
 
 const REPO = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const ROOT = join(REPO, "oas-package");
-const PROFILE = readFileSync(join(ROOT, "configs", "default", "oas-config.yaml"), "utf8");
+// CANONICAL 0.20 LOCATION. The template's CONTENT is byte-identical to the v1
+// profile — only its location moved, from configs/ to config-templates/, which
+// is what the released kernel's isCanonicalTemplatePath requires.
+const TEMPLATE_PATH = "config-templates/default/oas-config.yaml";
+const PROFILE = readFileSync(join(ROOT, ...TEMPLATE_PATH.split("/")), "utf8");
 const CHILD = readFileSync(join(REPO, "test", "fixtures", "child-oas-config.yaml"), "utf8");
 
 function indentedBlock(text, heading, indent) {
@@ -29,25 +33,42 @@ function indentedBlock(text, heading, indent) {
   return body.join("\n");
 }
 
-test("distribution and capability identities remain independently versioned", () => {
+test("distribution and capability identities are versioned in deliberate lockstep", () => {
   const pkg = JSON.parse(readFileSync(join(ROOT, "oas-package.json"), "utf8"));
   const capability = JSON.parse(readFileSync(join(ROOT, "capabilities", "oas-review", "oas.json"), "utf8"));
   assert.equal(pkg.package, "oas.dev");
-  assert.equal(pkg.version, "1.0.0");
+  assert.equal(pkg.version, "2.0.0");
   assert.deepEqual(pkg.capabilities, ["capabilities/oas-review"]);
   assert.equal(capability.capability, "oas.review");
-  assert.equal(capability.version, "1.2.0");
-  assert.equal(pkg.configs.default.path, "configs/default/oas-config.yaml");
-  assert.equal(pkg.configs.default.default, true);
-  assert.deepEqual(pkg.dependencies, ["oas.okf@v1.4.1", "oas.aweb@v1.8.0", "oas.authoring@v1.0.0"]);
+  // The KERNEL does not require package version == capability version; this
+  // repository keeps them equal so "oas.dev 2.0.0" names one reviewable artifact.
+  assert.equal(capability.version, "2.0.0");
+  // Both floors sit at the release that introduced capability materialization.
+  assert.equal(pkg.compatibility.oas, ">=0.20.0");
+  assert.equal(capability.compatibility.oas, ">=0.20.0");
+  assert.deepEqual(pkg.dependencies, ["oas.okf@v2.0.0", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"]);
   // No literal placeholder ever ships in the manifest.
   assert.doesNotMatch(JSON.stringify(pkg.dependencies), /TODO|pin-at-publication|placeholder/i);
+});
+
+test("the package ships exactly one canonical, default config TEMPLATE", () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "oas-package.json"), "utf8"));
+  // The deprecated 0.19 spelling may not be emitted, and may not coexist with
+  // the canonical one — the released kernel refuses a manifest carrying both.
+  assert.equal(pkg.configs, undefined);
+  assert.deepEqual(Object.keys(pkg.configTemplates), ["default"]);
+  assert.equal(pkg.configTemplates.default.path, TEMPLATE_PATH);
+  assert.match(pkg.configTemplates.default.path, /^config-templates\/(?!\.\.?(\/|$))[^/\\][^\\]*$/);
+  assert.equal(pkg.configTemplates.default.default, true, "the only template is the default one, so --config is never needed");
+  // A dedicated capability root: "." cannot be materialized as a self-contained
+  // artifact and is rejected outright by the kernel next to configTemplates.
+  assert.ok(!pkg.capabilities.includes("."));
 });
 
 test("dependencies use the immutable published catalog-selector form", () => {
   const { deps, selectors } = checkPublishedForm();
   assert.deepEqual(deps, PUBLISHED_FORM);
-  assert.deepEqual(deps, ["oas.okf@v1.4.1", "oas.aweb@v1.8.0", "oas.authoring@v1.0.0"]);
+  assert.deepEqual(deps, ["oas.okf@v2.0.0", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"]);
   assert.deepEqual(selectors, deps);
 });
 
@@ -67,7 +88,9 @@ test("catalog-selector replacement is deterministic (not a TODO)", () => {
   const rewritten = JSON.parse(text);
   assert.deepEqual(rewritten.dependencies, selectors);
   assert.equal(rewritten.package, "oas.dev");
-  assert.equal(rewritten.version, "1.0.0");
+  assert.equal(rewritten.version, "2.0.0");
+  // The swap touches dependencies only: the template descriptor is untouched.
+  assert.equal(rewritten.configTemplates.default.path, TEMPLATE_PATH);
 });
 
 test("default profile is generic OAS development policy", () => {
