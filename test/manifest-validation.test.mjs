@@ -491,6 +491,17 @@ test("validator rejects a machine path leaked in a template COMMENT", (t) => {
   assert.match(result.stderr, /user home directory/);
 });
 
+test("validator still rejects a machine path in a comment that ALSO carries a URL", (t) => {
+  // The other direction of the URL exemption: it belongs to the URL span, not
+  // to any comment that happens to contain one. A leading link must not launder
+  // the machine path beside it.
+  const result = runFixture(t, {
+    template: `# see https://example.com/Users/guide then /Users/someone/notes.md\n${SHIPPED_TEMPLATE}`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /user home directory/);
+});
+
 test("validator rejects a credential assigned in a template comment", (t) => {
   const result = runFixture(t, { template: `# api_key: sk-live-leaked\n${SHIPPED_TEMPLATE}` });
   assert.equal(result.status, 1);
@@ -518,6 +529,13 @@ for (const [label, comment] of [
   ["an illustrative placeholder path", "# adopt this into /path/to/your/workspace"],
   ["the portability promise itself", "# no credential, account, or machine path may ship here"],
   ["prose containing the word file:", "# edit this file: before use"],
+  // A documentation link is portable wherever its PATH happens to lead. The
+  // identity scan removes complete non-file URL spans before looking for a home
+  // directory, so a link under /Users/ or /home/ is a link, not a leak.
+  ["a documentation URL whose path spells a user home", "# see https://example.com/Users/guide"],
+  ["a documentation URL under /home/", "# see https://docs.example.test/home/getting-started"],
+  // …and a measurement is not a secret: `max_tokens` is a context budget.
+  ["a documented model setting that names tokens", "# max tokens: 4096"],
 ]) {
   test(`validator accepts ${label} in a template comment`, (t) => {
     const result = runFixture(t, { template: `${comment}\n${SHIPPED_TEMPLATE}` });

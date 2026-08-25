@@ -158,6 +158,9 @@ test("CREDENTIAL_KEY matches secret-NAMING keys and nothing that merely resemble
   for (const key of [
     "token", "tokens", "secret", "secrets", "password", "passwd", "api_key",
     "api-key", "apikey", "credentials", "auth_token", "client-secret", "api_keys",
+    // The tightening below must not open any of these: none carries a
+    // non-secret qualifier, so each still names a secret VALUE.
+    "token_value", "secret_key", "api_key_2", "refresh-token", "service_password",
   ]) {
     assert.ok(CREDENTIAL_KEY.test(key), `MUST be flagged: ${key}`);
   }
@@ -166,10 +169,32 @@ test("CREDENTIAL_KEY matches secret-NAMING keys and nothing that merely resemble
   }
 });
 
+test("CREDENTIAL_KEY accepts settings that MEASURE or SWITCH credentials", () => {
+  // The reported over-flagging. A credential noun with a measurement head
+  // (`max_tokens` — a model's context budget) or a qualifier tail
+  // (`token_limit`, `secret-scanning`) names something ABOUT credentials, never
+  // a credential, and a template that legitimately configures one could not
+  // ship. That is how a portability gate teaches people to route around it.
+  for (const key of [
+    "max_tokens", "max-tokens", "min_tokens", "input_tokens", "output_tokens",
+    "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens",
+    "num_tokens", "number_tokens",
+    "token_budget", "token_limit", "tokens_limit", "token-count", "token_usage",
+    "secret_scanning", "secret-scanner", "password_policy", "password-policies",
+    "api_key_rotation", "credentials_required", "token_ttl", "secret_expiry",
+    "credential_enabled", "credentials-disabled",
+  ]) {
+    assert.equal(CREDENTIAL_KEY.test(key), false, `MUST NOT be flagged: ${key}`);
+  }
+});
+
 test("CREDENTIAL_ASSIGNMENT matches an assignment, not the WORD", () => {
   for (const text of [
     "api_key: sk-live-leaked", "--api-key=sk-live-leaked", "token=abc123",
     "password:hunter2", "passwd=hunter2", "# secret: shh",
+    // A credential inside a URL is still a credential: the comment scan
+    // deliberately does NOT strip URL spans before this rule.
+    "see https://example.test/callback?token=sk-live-leaked",
   ]) {
     assert.ok(CREDENTIAL_ASSIGNMENT.test(text), `MUST be flagged: ${text}`);
   }
@@ -177,9 +202,19 @@ test("CREDENTIAL_ASSIGNMENT matches an assignment, not the WORD", () => {
     "no credential, account, or machine path may ship here",
     "the operator adds any auth to the local snapshot",
     "tokenizer: simple",
+    // The same over-flagging, in prose. A documented model setting is not a
+    // leaked secret, and a template's comments are where such settings get
+    // explained.
+    "# max tokens: 4096",
+    "# total tokens = 128000",
+    "# token budget: 500",
   ]) {
     assert.equal(CREDENTIAL_ASSIGNMENT.test(text), false, `MUST NOT be flagged: ${text}`);
   }
+  // Non-vacuity for the head guard: the qualifier has to be a WORD of its own,
+  // so a noun that merely ends in one is untouched.
+  assert.ok(CREDENTIAL_ASSIGNMENT.test("climax tokens: sk-live-leaked"),
+    "only a standalone measurement word may exempt an assignment");
 });
 
 test("valueLeaks finds a credential key at any depth, and leaves portable settings alone", () => {
@@ -241,6 +276,36 @@ test("commentLeaks leaves documentation alone", () => {
     ["an inline command", "# run `oas init --package oas.dev`"],
   ]) {
     assert.deepEqual(commentLeaks(comment), [], `MUST NOT be flagged — ${label}: ${comment}`);
+  }
+});
+
+test("commentLeaks exempts a portable URL whose PATH spells a home directory", () => {
+  // The header has always promised this — "running the value rules over prose
+  // would reject the portable URL https://docs.example.test/home/getting-started"
+  // — while the identity markers matched /home/ and /Users/ inside a URL path
+  // just as happily as in a machine path. Removing complete non-file URL spans
+  // first, exactly as the value half does, is what makes the promise true.
+  for (const [label, comment] of [
+    ["an https URL under /Users/", "# see https://example.com/Users/guide"],
+    ["an https URL under /home/", "# see https://docs.example.test/home/getting-started"],
+    ["two of them in one sentence", "# see https://example.test/home/a and https://example.test/Users/b"],
+    ["a URL beside ordinary prose", "# the guide at https://example.test/Users/guide explains the layout"],
+  ]) {
+    assert.deepEqual(commentLeaks(comment), [], `MUST NOT be flagged — ${label}: ${comment}`);
+  }
+});
+
+test("commentLeaks still catches a real machine path beside a URL", () => {
+  // The other direction, and the reason the exemption is by SPAN rather than by
+  // "this comment contains a URL": one leading link must not launder the
+  // machine path that follows it.
+  for (const [label, comment] of [
+    ["a home path after a URL", "# see https://example.test/docs then /Users/someone/notes.md"],
+    ["a home path before a URL", "# copy /home/someone/notes.md, see https://example.test/docs"],
+    ["a tilde path beside a URL", "# https://example.test/Users/guide describes ~/oas/notes.md"],
+    ["a file: URI beside a URL", "# https://example.test/docs mirrors file:///Users/me/notes.md"],
+  ]) {
+    assert.ok(commentLeaks(comment).length, `MUST be flagged — ${label}: ${comment}`);
   }
 });
 

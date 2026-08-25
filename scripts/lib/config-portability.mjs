@@ -26,7 +26,10 @@
  *            "/etc/oas" in a sentence is documentation, and running the value
  *            rules over prose would reject the portable URL
  *            https://docs.example.test/home/getting-started. Only a person or
- *            machine IDENTITY, and a credential assignment, leak here.
+ *            machine IDENTITY, and a credential assignment, leak here — and the
+ *            identity half removes complete non-file URL spans first, the same
+ *            way the value half does, so that promise about /home/ URLs holds
+ *            in the code and not only in this comment.
  *
  * Comments are scanned at all because the kernel ignores them completely and
  * they still land in the adopter's repository word for word. The kernel's
@@ -43,17 +46,61 @@ const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 /** Host environment references, wherever they appear inside a value. */
 const HOST_ENV = /\$\{?(HOME|USER|PWD)\b|%(USERPROFILE|HOMEPATH|USERNAME)%/i;
 
-/** A key that NAMES a secret. `passw[or]{0,2}ds?` rather than `passwo?rds?`:
+/** The nouns that NAME a secret. `passw[or]{0,2}ds?` rather than `passwo?rds?`:
  * the unix spelling `passwd` is at least as likely in a settings key as
  * `password`, and an adversarial fixture found it missing. A deny heuristic
  * that only covers the long form is the one that ships a secret. */
-export const CREDENTIAL_KEY = /(^|[_-])(tokens?|secrets?|passw[or]{0,2}ds?|api[_-]?keys?|credentials?)($|[_-])/i;
+const CREDENTIAL_NOUN = "tokens?|secrets?|passw[or]{0,2}ds?|api[_-]?keys?|credentials?";
+
+/**
+ * QUALIFIERS THAT MAKE A CREDENTIAL NOUN A MEASUREMENT OR A SWITCH.
+ *
+ * The noun list above is the right thing to look for and the wrong thing to
+ * stop at: `max_tokens` is a model's context budget, `token_limit` is a rate
+ * limit, `secret-scanning` turns a scanner on. None of them is a secret, and a
+ * template that legitimately configures any of them could not be shipped —
+ * which is how a portability gate teaches people to work around it.
+ *
+ * So the noun is read in context. A word from HEAD immediately before it, or
+ * from TAIL immediately after it, means the key names something ABOUT
+ * credentials rather than a credential, and the key is accepted. Both lists are
+ * closed and short on purpose: every entry is a word that cannot plausibly
+ * introduce or terminate a secret VALUE. `token_value`, `secret_key`,
+ * `api_key_2` and every bare spelling stay flagged, because none of them
+ * matches.
+ */
+const NON_SECRET_HEAD = "max|min|total|input|output|prompt|completion|cached|estimated|average|avg|num|number";
+const NON_SECRET_TAIL = "budgets?|limits?|counts?|usage|polic(?:y|ies)|scanning|scanner|rotation|ttl|expiry|required|enabled|disabled";
+
+/**
+ * A key that names a secret VALUE. Boundaries are lookarounds rather than
+ * consumed separators so the head/tail guards can inspect what sits either side
+ * of the noun without the match position moving.
+ */
+export const CREDENTIAL_KEY = new RegExp(
+  "(?<=^|[_-])" +                                        // key-word boundary before
+  `(?<!(?:^|[_-])(?:${NON_SECRET_HEAD})[_-])` +          // …not `max_`, `input_`, …
+  `(?:${CREDENTIAL_NOUN})` +
+  "(?=$|[_-])" +                                         // key-word boundary after
+  `(?![_-](?:${NON_SECRET_TAIL})(?:$|[_-]))`,            // …not `_limit`, `_scanning`, …
+  "i",
+);
 
 /** A secret being ASSIGNED, in free text: `api_key: sk-…`, `--api-key=sk-…`,
  * `token=…`. Key-name checking alone misses both a credential smuggled inside
  * an argument string and one sitting in a comment, and a template's comments are
- * copied to the adopter as faithfully as its values. */
-export const CREDENTIAL_ASSIGNMENT = /(^|[^\w])-{0,2}(tokens?|secrets?|passw[or]{0,2}ds?|api[_-]?keys?|credentials?)\s*[:=]/i;
+ * copied to the adopter as faithfully as its values.
+ *
+ * The same head guard applies, widened to a SPACE separator because this rule
+ * reads prose: `# max tokens: 4096` is a documented setting, not a leaked one.
+ * No tail guard is needed — the assignment operator has to follow the noun
+ * immediately, so `token budget: 500` never matched in the first place. */
+export const CREDENTIAL_ASSIGNMENT = new RegExp(
+  "(?:^|[^\\w])-{0,2}" +
+  `(?<!(?:^|[^A-Za-z0-9])(?:${NON_SECRET_HEAD})[\\s_-])` +
+  `(?:${CREDENTIAL_NOUN})\\s*[:=]`,
+  "i",
+);
 
 /** A COMPLETE URL span anywhere inside a scalar. Used to remove portable
  * references before looking for local paths in what remains — the exemption
@@ -199,12 +246,29 @@ export function valueLeaks(parsed) {
 export function commentLeaks(comments) {
   const leaks = [];
   const text = String(comments ?? "");
+  // COMPLETE URL SPANS ARE REMOVED FIRST, exactly as they are for values.
+  //
+  // The header promises that a portable reference such as
+  // https://docs.example.test/home/getting-started survives the comment scan;
+  // the identity markers did not honour that, because `/(Users|home)/…` matches
+  // just as happily inside a URL PATH as inside a machine path. A documentation
+  // link to a page under /home/ or /Users/ was therefore rejected — and the
+  // narrower rule comments are supposed to get was, in that one respect, the
+  // stricter one.
+  //
+  // `file:` spans are deliberately left in place by withoutPortableUrls: they
+  // ARE local paths, and the file: marker below still has to see them.
+  const identityText = withoutPortableUrls(text);
   for (const [pattern, what] of IDENTIFYING_MARKERS) {
-    if (pattern.test(text)) {
+    if (pattern.test(identityText)) {
       leaks.push(`a comment mentions ${what}; comments are adopted verbatim into other people's deployments`);
       break;
     }
   }
+  // NOT identityText: the credential scan runs over the ORIGINAL text, because a
+  // URL is a perfectly good place to leak one (`https://host/x?token=sk-live`).
+  // The URL exemption is about PATHS looking like machine paths, and extending
+  // it here would trade a false positive for a missed secret.
   if (CREDENTIAL_ASSIGNMENT.test(text)) {
     leaks.push("a comment assigns a credential-shaped value; comments are adopted verbatim into other people's deployments");
   }
