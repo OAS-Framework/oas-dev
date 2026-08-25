@@ -119,12 +119,33 @@ rather than let it go stale.
   the engine's template validation: supplied = own capabilities ∪ dependency
   closure, plus layer agreement).
 
-  The gate also guards its own COVERAGE: it walks the repository and refuses to
-  run when a file `node --test` would discover sits outside the inventory it
-  names as argv — a `.test.js`, a suite outside `test/`, one of node's
-  dash/underscore naming conventions, or a symlinked directory under `test/`
-  that readdir-based recursion skips. Each of those is a suite that silently
-  never executes, and green looks identical either way.
+  The gate also guards its own COVERAGE, against node's discovery rule as
+  MEASURED on node 22 rather than as remembered. It walks the repository and
+  refuses to run when a file `node --test` would discover sits outside the
+  inventory it names as argv. Exactly two prongs are enforced, and nothing
+  wider is claimed:
+
+  - **directory** — inside a directory named exactly `test`, at any depth,
+    *every* `.js`/`.cjs`/`.mjs`/`.ts`/`.mts`/`.cts` file is discovered, whatever
+    its name and however deep below that directory it sits. `lib/test/parser.mjs`
+    and `test/helpers/fixture.mjs` are both run by node, so both must be
+    inventoried. There is no "helper module" exemption, because there is no
+    location under a `test` directory that node leaves alone.
+  - **name** — anywhere else, `test`, `test-*` or `*[.-_]test` with one of those
+    extensions, matched case-insensitively (node matches file names
+    case-insensitively on a case-insensitive filesystem; the gate always does,
+    which flags a superset rather than missing one).
+
+  Symlinks are refused in both directions rather than followed: node runs a
+  symlinked test FILE, and *nobody* traverses a symlinked DIRECTORY, so suites
+  beneath one run nowhere while the tree looks populated. `node_modules`,
+  dot-prefixed entries (which node also skips) and other instances' work trees
+  under `agents/<soul>/instances/<id>/` are outside the scan — the last because
+  they are foreign checkouts at other revisions, which this repository neither
+  owns nor may rewrite.
+
+  Each thing the gate refuses is a suite that would silently never execute, and
+  green looks identical either way.
 - **`npm run probe` (released kernel, hermetic).** `scripts/consumer-probe.mjs`
   npm-installs the PUBLISHED `@oas-framework/oas` at the version derived from
   this package's `compatibility.oas` floor, invokes it by absolute path under a

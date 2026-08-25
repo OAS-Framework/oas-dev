@@ -240,9 +240,17 @@ npm run probe
 `npm test` is a gate *and* the runner: it rebuilds the canonical `scripts` block,
 refuses anything else, then runs manifest validation and exactly the suites under
 `test/` as argv — never through a shell, never by bare discovery. It also refuses
-to run when a file `node --test` *would* discover sits outside that inventory (a
-`.test.js`, a suite outside `test/`, a symlinked suite directory), because a
-suite that silently never executes is worse than a failing one. It is offline,
+to run when a file `node --test` *would* discover sits outside that inventory,
+because a suite that silently never executes is worse than a failing one. What is
+enforced is node 22's own two-pronged rule, measured rather than assumed: every
+`.js`/`.cjs`/`.mjs`/`.ts`/`.mts`/`.cts` file inside a directory named exactly
+`test` **at any depth** (there is no helper-module exemption — node runs them
+all), and, elsewhere, node's `test` / `test-*` / `*[.-_]test` name conventions.
+Symlinks are refused in both directions: node follows a symlinked test *file*,
+and nobody traverses a symlinked *directory*. `node_modules`, dot-prefixed
+entries and other instances' work trees under `agents/<soul>/instances/<id>/` are
+outside the scan; see [`SCHEMA-STATUS.md`](SCHEMA-STATUS.md) for the exact rule.
+It is offline,
 and it covers both manifests against the vendored 0.20 schemas
 ([`SCHEMA-STATUS.md`](SCHEMA-STATUS.md)) — whose absence is now fatal rather than
 a skipped rule — resource containment, template portability, the reviewer

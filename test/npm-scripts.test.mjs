@@ -273,7 +273,14 @@ test("this repository's own tree is fully covered by the inventory", () => {
   assert.deepEqual(coverageProblems(inventory(), ROOT), []);
 });
 
+/**
+ * NODE'S DISCOVERY, AS MEASURED. Every row below was confirmed against node
+ * v22.21.1 by planting the file and reading `node --test --test-reporter=tap`'s
+ * subtest names — the gate's rule is only as good as the semantics it encodes,
+ * and four of these rows were holes the previous rule left open.
+ */
 for (const [label, path] of [
+  // --- NAME prong, outside a test directory
   ["a .test.js beside the suites", "test/legacy.test.js"],
   ["a .test.cjs beside the suites", "test/legacy.test.cjs"],
   ["a .test.mjs OUTSIDE test/", "lib/parser.test.mjs"],
@@ -282,6 +289,18 @@ for (const [label, path] of [
   ["node's underscore convention", "test/parser_test.mjs"],
   ["node's test- prefix convention", "test/test-parser.mjs"],
   ["a bare test.mjs in a source directory", "scripts/test.mjs"],
+  ["an empty affix, which node still matches", "lib/-test.mjs"],
+  ["a type-stripped .ts suite", "lib/parser.test.ts"],
+  ["a type-stripped .mts suite", "lib/parser.test.mts"],
+  ["node's case-insensitive name match", "lib/parser.Test.mjs"],
+  // --- DIRECTORY prong: node runs EVERY script file under a `test` directory,
+  // at any depth, whatever its name. Each of these was silently missed before.
+  ["a `test` directory inside lib/", "lib/test/parser.mjs"],
+  ["a `test` directory inside a package", "packages/foo/test/bar.mjs"],
+  ["a `test` directory nested two levels down, with its own subtree", "a/b/test/c/suite.mjs"],
+  ["a name-less module in a subdirectory OF test/", "test/lib/helper.mjs"],
+  ["the former 'helper module' exemption, which node executes", "test/helpers/build-fixture.mjs"],
+  ["a .ts file under a test directory", "test/support/harness.ts"],
 ]) {
   test(`coverage guard reports ${label}`, (t) => {
     const root = tree(t, ["test/alpha.test.mjs", path]);
@@ -292,41 +311,66 @@ for (const [label, path] of [
   });
 }
 
-test("coverage guard leaves ordinary files, helper modules and excluded trees alone", (t) => {
+test("coverage guard leaves ordinary files and excluded trees alone", (t) => {
   // Non-vacuity in every direction the exclusion list claims. A rule this broad
   // has to be shown NOT firing, or it is indistinguishable from "fail always".
+  // Every row is a spelling node was confirmed NOT to discover.
   const root = tree(t, [
     "test/alpha.test.mjs",
     "test/nested/beta.test.mjs",
-    "test/helpers/build-fixture.mjs",             // a helper module, not a suite
-    "test/fixtures/child-oas-config.yaml",        // fixture DATA
+    "test/fixtures/child-oas-config.yaml",        // fixture DATA, not a script
+    "scripts/lib/config-portability.mjs",         // shared helper, outside test/
     "scripts/validate-manifests.mjs",             // ordinary source
     "README.md",
+    "lib/testfoo.mjs",                            // no separator: not node's convention
+    "lib/test_foo.mjs",                           // `test_` is a PREFIX node does not honour
+    "lib/parser.test.jsx",                        // not a runtime extension
+    "tests/plural.mjs",                           // the directory must be named exactly `test`
+    "realtest/x.mjs",
     "node_modules/some-dep/index.test.js",        // installed tree
     "node_modules/some-dep/test/thing.js",
-    ".git/hooks/pre-commit.mjs",
-    // Another instance's checkout: gitignored, at another revision, and the
-    // exact tree this gate exists to keep OUT of the run.
+    ".git/hooks/pre-commit.mjs",                  // node skips dot-prefixed entries
+    ".hidden/test/suite.mjs",
+    // Another instance's checkout: a foreign work tree at another revision, and
+    // the exact tree this gate exists to keep OUT of the run.
     "agents/oas-dev-expert/instances/x/work/test/stale.test.mjs",
   ]);
   assert.deepEqual(coverageProblems(["test/alpha.test.mjs", "test/nested/beta.test.mjs"], root), []);
 });
 
-test("coverage guard REFUSES a symlinked directory under test/", (t) => {
-  // readdir reports a link, not a directory, so inventorySuites' recursion
-  // skips the whole subtree: every suite under it disappears from the run while
-  // the tree still looks populated. Fail closed, as the kernel does for a
-  // symlinked package resource.
+test("coverage guard REFUSES a symlinked directory under a test tree", (t) => {
+  // NOBODY follows it: node does not traverse a symlinked directory, and readdir
+  // reports a link rather than a directory, so inventorySuites' recursion skips
+  // the whole subtree. Every suite under it runs nowhere while the tree still
+  // looks populated. Fail closed, as the kernel does for a symlinked package
+  // resource.
   const root = tree(t, ["test/alpha.test.mjs", "extra/gamma.test.mjs"], [["test/suites", "extra"]]);
   // First: prove the hole is real — the inventory does NOT see the linked tree.
   assert.deepEqual(inventorySuites(join(root, "test"), root), ["test/alpha.test.mjs"],
     "the inventory must really miss a symlinked directory, or refusing one proves nothing");
   const problems = coverageProblems(inventorySuites(join(root, "test"), root), root);
-  assert.ok(problems.some((p) => /symlinked directory "test\/suites" under test\//.test(p)),
+  assert.ok(problems.some((p) => /symlinked directory "test\/suites" under a test\/ tree/.test(p)),
     problems.join("\n"));
   // The link's TARGET is reported on its own too — it is an uninventoried suite
   // wherever it sits, and the two findings are independent.
   assert.ok(problems.some((p) => p.includes("extra/gamma.test.mjs")), problems.join("\n"));
+});
+
+test("coverage guard REFUSES a symlinked test FILE, which node follows and runs", (t) => {
+  // The other symlink direction, and the opposite behaviour: node FOLLOWS a
+  // symlinked file. `test/helper.mjs -> ../elsewhere/suite.mjs` is discovered by
+  // the directory prong and executed under bare discovery, while the gate's walk
+  // used to skip every symlink outright and the inventory only ever names
+  // `*.test.mjs`. So it ran under `node --test` and never under `npm test`.
+  const root = tree(t, ["test/alpha.test.mjs", "elsewhere/suite.mjs"],
+    [["test/helper.mjs", "elsewhere/suite.mjs"]]);
+  const problems = coverageProblems(inventorySuites(join(root, "test"), root), root);
+  assert.ok(problems.some((p) => /symlinked test file "test\/helper\.mjs"/.test(p)), problems.join("\n"));
+  // …and a symlinked file node would NOT discover is left alone, or the rule is
+  // just "no symlinks" wearing a discovery argument.
+  const benign = tree(t, ["test/alpha.test.mjs", "elsewhere/notes.md"],
+    [["docs.md", "elsewhere/notes.md"]]);
+  assert.deepEqual(coverageProblems(["test/alpha.test.mjs"], benign), []);
 });
 
 test("the coverage guard runs INSIDE the gate, not only in this suite", (t) => {
@@ -351,6 +395,31 @@ test("the gate also refuses a symlinked suite directory end to end", (t) => {
   assert.equal(run.status, 1, run.stdout);
   assert.match(run.stderr, /symlinked directory/);
   assert.deepEqual(repo.ran(), []);
+});
+
+test("the gate refuses a symlinked test FILE end to end — and bare discovery WOULD run it", (t) => {
+  // Both halves, in one fixture. The planted link is a script file under test/,
+  // so node's directory prong discovers it; the gate must refuse before the
+  // suites run, and the bare-discovery half proves the refusal is not academic.
+  const repo = fixtureRepo(t);
+  mkdirSync(join(repo.root, "elsewhere"), { recursive: true });
+  writeFileSync(join(repo.root, "elsewhere", "smuggled.mjs"), [
+    'import { writeFileSync } from "node:fs";',
+    `writeFileSync(${JSON.stringify(join(repo.root, "markers", "smuggled"))}, "");`,
+    "",
+  ].join("\n"));
+  symlinkSync(join(repo.root, "elsewhere", "smuggled.mjs"), join(repo.root, "test", "helper.mjs"));
+
+  const run = repo.runGate();
+  assert.equal(run.status, 1, run.stdout);
+  assert.match(run.stderr, /symlinked test file/);
+  assert.deepEqual(repo.ran(), [], "nothing may run while a symlinked test file is in the tree");
+
+  // Non-vacuity: bare discovery really does follow the link and execute it, so
+  // the file the gate refuses is a file that otherwise runs behind its back.
+  spawnSync(process.execPath, ["--test"], { cwd: repo.root, encoding: "utf8", env: childEnv(process.env) });
+  assert.ok(repo.ran().includes("smuggled"),
+    "node --test must follow the symlinked file, or refusing it proves nothing");
 });
 
 // ---------------------------------------------------------------------------
