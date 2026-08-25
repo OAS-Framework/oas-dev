@@ -35,7 +35,22 @@ import { fileURLToPath } from "node:url";
 /** The DISTRIBUTED payload root, where oas-package.json lives. */
 export const ROOT = resolve(fileURLToPath(new URL("../oas-package", import.meta.url)));
 
-/** This release's immutable leaf tag. */
+/**
+ * THE single definition of this release's immutable tag — for this package and
+ * for the official leaves alike.
+ *
+ * It used to be defined twice, here and in scripts/lib/readme-install-sources.mjs,
+ * with the same literal under two different justifications ("this release's
+ * immutable leaf tag" and "this release's immutable tag"). That is the shape a
+ * constant drifts into: one copy gets bumped, the other does not, and each
+ * file's tests keep passing against its own. The README lib imports this one
+ * now, and test/oas-dev-profile.test.mjs cross-checks it against the shipped
+ * manifest's own version, so the literal cannot outlive the release it names.
+ *
+ * One constant is right because oas.dev and the official leaves ship in lockstep
+ * at the same tag: every PUBLISHED_SELECTORS entry below carries it, and so does
+ * every install spelling the README documents.
+ */
 export const RELEASE_TAG = "v2.0.0";
 
 /**

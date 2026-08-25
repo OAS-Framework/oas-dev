@@ -39,6 +39,8 @@
  * documentation anyway.
  */
 
+import { RELEASE_TAG } from "../catalog-selectors.mjs";
+
 /** Fenced blocks whose contents are commands a reader is expected to type. */
 const COMMAND_LANGUAGES = new Set(["", "bash", "sh", "shell", "console", "zsh"]);
 
@@ -49,12 +51,20 @@ const SHELL_METACHARACTERS = /[`$&|;<>(){}*?!\\"']|\[|\]/;
 /** The README heading that owns the spelling table and the refusal bullets. */
 export const SPELLINGS_HEADING = "## Install spellings the released kernel accepts";
 
-/** This release's immutable tag. A documented source that carries a ref or a
+/**
+ * This release's immutable tag. A documented source that carries a ref or a
  * catalog selector must carry exactly this one: a floating ref documents
  * whatever the branch happens to be, and an unpinned catalog id documents
  * whatever ref the consumer's catalog holds (v1.0.0, on the released 0.20.0
- * kernel's bundled catalog). */
-export const RELEASE_TAG = "v2.0.0";
+ * kernel's bundled catalog).
+ *
+ * RE-EXPORTED, never redeclared. This was a second literal with the same value
+ * as scripts/catalog-selectors.mjs' — the tag the dependency selectors are built
+ * from — and two copies of a version constant are one bump away from disagreeing
+ * while both files' tests stay green against their own. See that module for why
+ * a single constant covers this package and its official leaves alike.
+ */
+export { RELEASE_TAG };
 
 /** The lock's NORMALIZED spellings: outputs of the parser, never inputs. */
 export const NORMALIZED_LOCK_PREFIXES = [

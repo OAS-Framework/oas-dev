@@ -99,9 +99,15 @@ authors, review → developers, worktree work-mode, and the
    the SCOPE's name, and a distinct one makes `oas doctor` inside `oas/` report
    which scope it resolved. TEAM identity is untouched: the child declares no
    `team:` block, so `team.name` resolves to the root profile's `oas-framework`.
-   The fixture mirrors what the framework repository commits today, and the
-   parity suite asserts both halves — the differing scope name AND the inherited,
-   unchanged team.
+   The fixture mirrors what the framework repository commits, and that is
+   *checked* rather than claimed: when a sibling framework repository is present
+   beside this checkout (or `OAS_PROBE_WORKSPACE` names the workspace), the
+   parity suite parses its committed `oas/oas-config.yaml` and requires the
+   fixture's settings to match it exactly — comments may differ, settings may
+   not. The framework repo is legitimately absent in CI and in an adopter's
+   checkout, so the comparison skips with a diagnostic there instead of failing.
+   Either way the suite asserts both halves of the delta — the differing scope
+   name AND the inherited, unchanged team.
 
 ## Layering rule (why the injection stays in the child `oas/` config)
 

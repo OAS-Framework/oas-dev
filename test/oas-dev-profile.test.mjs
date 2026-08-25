@@ -8,6 +8,7 @@ import {
   RELEASE_TAG,
   publishedSelectorProblems,
 } from "../scripts/catalog-selectors.mjs";
+import { RELEASE_TAG as README_RELEASE_TAG } from "../scripts/lib/readme-install-sources.mjs";
 
 const REPO = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const ROOT = join(REPO, "oas-package");
@@ -61,6 +62,20 @@ test("the package ships exactly one canonical, default config TEMPLATE", () => {
   // A dedicated capability root: "." cannot be materialized as a self-contained
   // artifact and is rejected outright by the kernel next to configTemplates.
   assert.ok(!pkg.capabilities.includes("."));
+});
+
+test("RELEASE_TAG has ONE definition, cross-checked against the shipped manifest", () => {
+  // It used to have two — scripts/catalog-selectors.mjs and
+  // scripts/lib/readme-install-sources.mjs each declared the literal, under
+  // different justifications. Two copies of a version constant are one bump away
+  // from disagreeing while both files' suites stay green against their own.
+  assert.equal(README_RELEASE_TAG, RELEASE_TAG,
+    "the README lib must re-export the selector module's tag, not declare a second one");
+  // And the surviving definition is cross-checked, so it cannot outlive the
+  // release it names: a version bump that forgot the tag fails here.
+  const version = JSON.parse(readFileSync(join(ROOT, "oas-package.json"), "utf8")).version;
+  assert.equal(RELEASE_TAG, `v${version}`,
+    "the release tag must name this package's own shipped version");
 });
 
 test("dependencies are exactly this release's immutable published selectors", () => {

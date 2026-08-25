@@ -121,7 +121,7 @@ test("the child oas/ config names the REPO SCOPE and inherits team identity unto
   // `oas-framework`. That difference is deliberate and is the whole content of
   // the delta: `name` is the SCOPE's name, and a distinct one makes `oas doctor`
   // inside oas/ report which scope it resolved.
-  assert.equal(child.name, "oas-framework-repo", "the fixture must mirror the framework repo's own config");
+  assert.equal(child.name, "oas-framework-repo", "the scope name the framework repo's own config commits");
   assert.notEqual(child.name, profile.name, "the scope name is what differs");
   // IDENTITY is the team block, and the child does not declare one — so the
   // adopted resolution inside oas/ carries the root profile's team through
@@ -241,4 +241,59 @@ test("parity of the BYTES: only the template's location moved in the 0.20 restru
 
   // And the abandoned location is really gone, so nothing can adopt the old copy.
   assert.equal(existsSync(join(ROOT, "configs")), false, "the pre-0.20 configs/ root must not survive");
+});
+
+/**
+ * THE MIRRORING CLAIM, CHECKED WHERE IT CAN BE.
+ *
+ * PARITY.md and the fixture's own comments say the child fixture "mirrors what
+ * the framework repository commits today". Nothing checked it, so it was a
+ * claim about a file in another repository asserted by a file in this one —
+ * true when written and unfalsifiable afterwards, which is the same defect as a
+ * pinned literal nobody derives.
+ *
+ * The framework repository is a SIBLING of this one in an OAS workspace, and it
+ * is legitimately absent almost everywhere this suite runs — CI, an adopter's
+ * checkout, the standalone package repo. So the comparison is guarded and skips
+ * cleanly, and it compares the PARSED settings rather than the bytes: the two
+ * files carry different comments on purpose (the fixture explains the delta to a
+ * reader of this package; the repo's config explains it to a contributor), and a
+ * byte comparison would fail on prose while missing a real policy divergence.
+ *
+ * `--git-common-dir` is used rather than `<repo>/..` because this repository is
+ * routinely checked out as a LINKED WORKTREE, where the siblings sit beside the
+ * PRIMARY checkout and not beside the worktree — the same derivation
+ * scripts/consumer-probe.mjs uses, and for the same reason.
+ */
+function frameworkRepoConfig() {
+  const candidates = [];
+  if (process.env.OAS_PROBE_WORKSPACE) candidates.push(resolve(process.env.OAS_PROBE_WORKSPACE));
+  candidates.push(resolve(REPO, ".."));
+  const common = spawnSync("git", ["-C", REPO, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" });
+  if (common.status === 0 && common.stdout.trim()) {
+    candidates.push(resolve(join(common.stdout.trim(), "..", "..")));
+  }
+  for (const workspace of candidates) {
+    const path = join(workspace, "oas", "oas-config.yaml");
+    if (existsSync(path)) return { path, text: readFileSync(path, "utf8") };
+  }
+  return undefined;
+}
+
+test("the child fixture really does mirror the framework repository's committed config", (t) => {
+  const actual = frameworkRepoConfig();
+  if (!actual) {
+    t.diagnostic("no sibling framework repository (oas/oas-config.yaml) beside this checkout — " +
+      "the mirroring claim is unverifiable here and is left to a workspace run; set OAS_PROBE_WORKSPACE to check it");
+    return;
+  }
+  const theirs = parseYaml(actual.text);
+  const ours = parseYaml(readRepo("test", "fixtures", "framework-child-oas-config.yaml"));
+  assert.deepEqual(ours, theirs,
+    `test/fixtures/framework-child-oas-config.yaml has diverged from ${actual.path} — ` +
+    "PARITY.md's delta 5 rests on the fixture being what the framework repository actually commits. " +
+    "Comments may differ; settings may not.");
+  // Both halves of delta 5, against the real file rather than the fixture alone.
+  assert.equal(theirs.name, "oas-framework-repo", "the framework repo commits its own SCOPE name");
+  assert.equal("team" in theirs, false, "…and declares no team block, so team identity is inherited");
 });
