@@ -132,9 +132,14 @@ rather than let it go stale.
     inventoried. There is no "helper module" exemption, because there is no
     location under a `test` directory that node leaves alone.
   - **name** — anywhere else, `test`, `test-*` or `*[.-_]test` with one of those
-    extensions, matched case-insensitively (node matches file names
-    case-insensitively on a case-insensitive filesystem; the gate always does,
-    which flags a superset rather than missing one).
+    extensions. The gate matches the name case-insensitively on every branch;
+    node, as measured on node 22.21.1 / darwin, does so only on the WILDCARD
+    branches — `TEST-baz.mjs`, `b.Test.mjs` and `C_TEST.mjs` all ran, while the
+    bare-name branch is case-SENSITIVE and neither `TEST.mjs` nor `Test.mjs` was
+    discovered (the `test` directory name is matched exactly too: `Test/` was not
+    discovered). Whether that split holds on a case-sensitive filesystem was not
+    measured, so the gate's blanket case-insensitivity is a deliberate SUPERSET:
+    it can over-report a file node would skip, never miss a suite node runs.
 
   Symlinks are refused in both directions rather than followed: node runs a
   symlinked test FILE, and *nobody* traverses a symlinked DIRECTORY, so suites

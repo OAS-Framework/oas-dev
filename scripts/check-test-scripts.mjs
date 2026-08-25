@@ -154,11 +154,14 @@ export function inventorySuites(dir, root = ROOT) {
  *   NAME       anywhere else, `test`, `test-*` or `*[.\-_]test`, with a script
  *              extension. `test-.mjs`, `-test.mjs` and `_test.mjs` match (the
  *              affix may be empty); `testfoo`, `test_foo`, `test.foo` and
- *              `atest` do not. FILE names match case-INSENSITIVELY here
- *              (`foo.Test.mjs`, `BAR_TEST.mjs` and `TEST-baz.mjs` all ran),
- *              which is the fail-closed spelling in any case: on a
- *              case-sensitive filesystem it flags a file node would skip, and
- *              a loud false report beats a silent unrun suite.
+ *              `atest` do not. CASE, measured rather than assumed: the WILDCARD
+ *              branches match case-insensitively (`foo.Test.mjs`, `BAR_TEST.mjs`
+ *              and `TEST-baz.mjs` all ran) while the BARE-name branch does not
+ *              (`TEST.mjs` and `Test.mjs` ran nowhere). This gate is
+ *              case-insensitive on both, on purpose: the extra branch flags a
+ *              file node skips, and a loud false report beats a silent unrun
+ *              suite — the same reasoning that covers a case-sensitive
+ *              filesystem, where node's behaviour here was not measured.
  *   EXTENSION  js, cjs, mjs — and, on node 22's type-stripping runtime, ts,
  *              mts, cts, which were confirmed discoverable under BOTH prongs.
  *              `.jsx`/`.tsx` were confirmed NOT discoverable.
@@ -206,7 +209,11 @@ export function inventorySuites(dir, root = ROOT) {
  *                                  the header); failing on them would make the
  *                                  gate red on every machine that has a live
  *                                  instance, over files whose fix is not this
- *                                  repository's to make.
+ *                                  repository's to make. The exempt thing is the
+ *                                  `<id>` DIRECTORY and its subtree, exactly as
+ *                                  written above: a file dropped directly into
+ *                                  `agents/<soul>/instances/` is ours, at our
+ *                                  revision, and stays in the scan.
  *
  * The list is closed and short on purpose. Anything else discoverable is either
  * inventoried or reported.
@@ -222,9 +229,20 @@ const TEST_DIR = "test";
  * skipped separately, by the same rule node applies. */
 const DISCOVERY_EXCLUDED_DIRS = new Set(["node_modules"]);
 
-/** True for `agents/<soul>/instances/...` — another instance's checkout. */
+/**
+ * True for the DIRECTORY `agents/<soul>/instances/<id>` — another instance's
+ * checkout, and the whole tree beneath it.
+ *
+ * `length > 3`, not `> 2`, and the caller additionally requires a DIRECTORY.
+ * The exempt thing is an instance's work tree, which is four segments deep; the
+ * old test matched `agents/<soul>/instances` itself, so the walk never entered
+ * it and ANY file dropped straight into `instances/` — this repository's own
+ * file, at this repository's own revision — was exempt too. That is a spelling
+ * of the documented shape nobody wrote down and a suite the gate would never
+ * report, which is the one outcome this file exists to prevent.
+ */
 const isNestedInstance = (segments) =>
-  segments[0] === "agents" && segments.length > 2 && segments[2] === "instances";
+  segments[0] === "agents" && segments.length > 3 && segments[2] === "instances";
 
 /** True when `rel` sits inside a directory named `test`, at any depth. */
 const underTestDir = (segments) => segments.slice(0, -1).includes(TEST_DIR);
@@ -254,7 +272,11 @@ function walkRepository(root) {
       const segments = rel.split("/");
       if (DISCOVERY_EXCLUDED_DIRS.has(entry.name)) continue;
       if (entry.name.startsWith(".")) continue;   // node skips these; so do we
-      if (isNestedInstance(segments)) continue;
+      // A DIRECTORY test, deliberately: `agents/<soul>/instances/x` and
+      // `agents/<soul>/instances/x.test.mjs` are the same four segments, and
+      // only the first is a foreign checkout. A file sitting directly in
+      // `instances/` is ours, so it stays in the scan.
+      if (entry.isDirectory() && isNestedInstance(segments)) continue;
       const path = join(dir, entry.name);
       if (entry.isSymbolicLink()) {
         // FAIL CLOSED, both ways, the way the released kernel treats a symlinked

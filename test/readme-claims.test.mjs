@@ -129,10 +129,14 @@ test("the trust posture enumerates the WHOLE closure, exempt capabilities includ
 });
 
 test("the trust posture does not overstate oas.aweb's REQUIRED hooks", () => {
-  // Measured against the artifact by the probe; pinned here because the claim is
-  // specific and cheap to get wrong. In oas.aweb@v2.0.0's manifest only `spawn`
-  // carries `"required": true` — `retire` is a plain string entry. The README
-  // said "required `spawn` / `retire` hooks", which invents a contract.
+  // Pinned here because the claim is specific and cheap to get wrong; MEASURED
+  // by the probe's "oas.aweb's REQUIRED hook is measured from its materialized
+  // manifest, not remembered", which reads the installed manifest and asserts
+  // the flag on each hook. That check did not exist when this comment first
+  // claimed it did, so the sentence below was pinned against a measurement
+  // nobody had written. In oas.aweb@v2.0.0's manifest only `spawn` carries
+  // `"required": true` — `retire` is a plain string entry. The README said
+  // "required `spawn` / `retire` hooks", which invents a contract.
   const trust = section(TRUST);
   assert.doesNotMatch(trust, /required\s*`?spawn`?\s*\/\s*`?retire`?\s*hooks/i,
     "only spawn is required:true at v2.0.0; retire is an ordinary hook entry");
@@ -188,6 +192,13 @@ test("the catalog paragraph states REPLACE semantics and names the dependency en
     "the README must name the error code an existing-but-unparseable catalog produces");
   assert.match(spellings, /broken package catalog/,
     "…and the kernel's own message, so a reader can match it against their terminal");
+  // …but it must not SPLICE the two into a quoted line no program prints. The
+  // code and the message are separate fields on the thrown error; the README
+  // used to show `invalid-source: broken package catalog <file>: <reason>` in
+  // backticks, which reads as verbatim output and sends a reader grepping their
+  // terminal for a string the kernel never emits.
+  assert.doesNotMatch(spellings, /`[^`]*invalid-source\s*:\s*broken package catalog/i,
+    "the code and the message are separate fields — quoting them joined invents a line the kernel never prints");
   assert.match(spellings, /cannot be read or parsed|unparseable|corrupt/i,
     "the README must say WHICH condition raises it, not just that some do");
   // The closure consequence: the three dependencies are catalog selectors, so an

@@ -12,15 +12,16 @@
  * would bless documents the kernel's own reader treats differently.
  *
  * SUPPORTED: $ref into `#/$defs/`, allOf, oneOf, const, enum, type, minLength,
- * pattern, not.pattern, minItems, uniqueItems, items, required, properties,
- * propertyNames.pattern, propertyNames.minLength, additionalProperties (false or
- * subschema).
+ * pattern, not.pattern, minItems, uniqueItems, items (SINGLE subschema form),
+ * required, properties, propertyNames.pattern, propertyNames.minLength,
+ * additionalProperties (false or subschema).
  *
  * NOT SUPPORTED, and absent from all four vendored schemas: anyOf, if/then/else,
- * $ref outside $defs, numeric bounds, format, dependent schemas. A schema that
- * grows one of these silently gets weaker validation, so `unsupportedKeywords`
- * exists to make that visible at the call site rather than at an adopter's
- * install.
+ * $ref outside $defs, numeric bounds, format, dependent schemas, and the
+ * TUPLE form of `items` (`items: [A, B]`, which positionally constrains the
+ * first elements). A schema that grows one of these silently gets weaker
+ * validation, so `unsupportedKeywords` exists to make that visible at the call
+ * site rather than at an adopter's install.
  *
  * SUPPORT IS POSITIONAL, WHICH IS WHY THE REPORT HAS TO BE TOO. A keyword this
  * evaluator implements at an ordinary schema position is not thereby implemented
@@ -32,6 +33,31 @@
  * property name the schema exists to refuse validated happily. Both halves are
  * fixed below: the walk is contextual, and `propertyNames.minLength` is now
  * actually applied.
+ *
+ * THREE MORE POSITIONS WERE SILENT, and each is closed by the cheaper of the two
+ * available fixes — implement it, or report it — never by leaving it unsaid:
+ *
+ *   SIBLINGS OF `oneOf`   were DROPPED: the branch loop returned, so any
+ *                         constraint beside the alternation was dead. This was
+ *                         live in the vendored lock schema, whose ROOT carries
+ *                         `type: "object"` and `required: ["lockfileVersion"]`
+ *                         beside its two-branch `oneOf` — neither of which was
+ *                         ever asserted, and neither of which could be REPORTED
+ *                         as unsupported without failing the "the vendored
+ *                         schemas are fully covered" check on a schema this
+ *                         package may not edit. So they are IMPLEMENTED: the
+ *                         alternation is one constraint among the node's others,
+ *                         which is what JSON Schema says it is.
+ *   SIBLINGS OF `$ref`    were dropped the same way, by the same early return.
+ *                         Same fix, one line, and it is the 2020-12 reading:
+ *                         `$ref` no longer replaces the schema object it sits in.
+ *   TUPLE-FORM `items`    asserts NOTHING here — `checkSchema` hands the whole
+ *                         array to every element as if it were one subschema —
+ *                         and went unreported, because the walk simply treats an
+ *                         array as a list of subschemas. No vendored schema uses
+ *                         the form, so it is REPORTED rather than implemented:
+ *                         positional item schemas are a real feature, and half of
+ *                         one is worse than none.
  */
 
 /** Keywords the evaluator applies at an ORDINARY schema position. */
@@ -53,6 +79,11 @@ const SCHEMA_MAPS = new Set(["properties", "$defs"]);
 
 /** Values are a subschema, or a list of them. */
 const SCHEMA_VALUED = new Set(["allOf", "oneOf", "items", "additionalProperties"]);
+
+/** …but only these may legally BE a list. `items: [A, B]` is the tuple form,
+ * which this evaluator does not apply, so an array here is reported rather than
+ * walked as if it were an ordinary list of subschemas. */
+const LIST_VALUED = new Set(["allOf", "oneOf"]);
 
 /** Keywords read only for the sub-keywords listed — everything else inside them
  * is ignored by checkSchema and must therefore be reported. */
@@ -89,7 +120,14 @@ export function unsupportedKeywords(schema, at = "#") {
         for (const [name, sub] of Object.entries(value || {})) walk(sub, `${path}/${key}/${name}`);
         continue;
       }
-      if (SCHEMA_VALUED.has(key)) { walk(value, `${path}/${key}`); continue; }
+      if (SCHEMA_VALUED.has(key)) {
+        // An array where only a single subschema is applied: the tuple form of
+        // `items`. checkSchema passes the whole array to every element, which
+        // asserts nothing at all, so the POSITION is reported.
+        if (Array.isArray(value) && !LIST_VALUED.has(key)) { out.push(`${path}/${key}`); continue; }
+        walk(value, `${path}/${key}`);
+        continue;
+      }
       // Everything left is a scalar assertion ($ref, type, pattern, minLength,
       // minItems, uniqueItems): nothing below it to walk.
     }
@@ -109,10 +147,15 @@ export function checkSchema(value, schema, at, rootSchema, emit) {
   if (schema === true || schema === undefined) return;
   if (schema === false) { emit(at, "is not allowed here"); return; }
   if (typeof schema !== "object") return;
+  // $ref AND oneOf ARE CONSTRAINTS, NOT REPLACEMENTS. Both used to `return`
+  // here, which silently dropped every keyword sitting beside them — and the
+  // vendored lock schema's ROOT is exactly that shape (`type` and `required`
+  // beside a two-branch `oneOf`), so two of its assertions were dead code no
+  // report mentioned. Falling through is both the 2020-12 reading and the only
+  // fix available for a schema this package copies byte for byte.
   if (schema.$ref) {
     const target = schema.$ref.startsWith("#/$defs/") ? rootSchema?.$defs?.[schema.$ref.slice("#/$defs/".length)] : undefined;
     if (target) checkSchema(value, target, at, rootSchema, emit);
-    return;
   }
   if (schema.allOf) for (const sub of schema.allOf) checkSchema(value, sub, at, rootSchema, emit);
   if (schema.oneOf) {
@@ -120,7 +163,6 @@ export function checkSchema(value, schema, at, rootSchema, emit) {
     // not pollute the caller's problem list with the reason it was not chosen.
     const failures = schema.oneOf.map((sub) => { const bucket = []; checkSchema(value, sub, at, rootSchema, (p, m) => bucket.push(`${p}: ${m}`)); return bucket; });
     if (!failures.some((bucket) => bucket.length === 0)) emit(at, `matches none of the allowed forms (${failures.flat().join("; ")})`);
-    return;
   }
   if ("const" in schema && !Object.is(value, schema.const)) emit(at, `must be ${JSON.stringify(schema.const)}`);
   if (schema.enum && !schema.enum.some((item) => Object.is(item, value))) emit(at, `must be one of ${schema.enum.join(", ")}`);

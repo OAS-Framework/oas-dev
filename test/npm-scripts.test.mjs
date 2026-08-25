@@ -338,6 +338,30 @@ test("coverage guard leaves ordinary files and excluded trees alone", (t) => {
   assert.deepEqual(coverageProblems(["test/alpha.test.mjs", "test/nested/beta.test.mjs"], root), []);
 });
 
+test("the instance exemption is the <id> DIRECTORY, not everything under instances/", (t) => {
+  // The exemption is documented as `agents/<soul>/instances/<id>/` — a foreign
+  // checkout at another revision. The test was `segments.length > 2`, which
+  // matched `agents/<soul>/instances` itself, so the walk never entered it and a
+  // file dropped straight into `instances/` — OURS, at OUR revision — was exempt
+  // too. `node --test` would have run it; the gate would never have named it.
+  const reported = tree(t, ["test/alpha.test.mjs", "agents/soul/instances/a.test.mjs"]);
+  const problems = coverageProblems(["test/alpha.test.mjs"], reported);
+  assert.equal(problems.length, 1, `a file directly in instances/ MUST be reported\n${problems.join("\n")}`);
+  assert.ok(problems[0].includes("agents/soul/instances/a.test.mjs"), problems[0]);
+  assert.match(problems[0], /DISCOVERS but this gate never runs/);
+
+  // The other direction, immediately beside it: the real foreign checkout — and
+  // everything at any depth below it — stays exempt, or this narrowing would
+  // have made the gate red on every machine with a live instance.
+  const exempt = tree(t, [
+    "test/alpha.test.mjs",
+    "agents/soul/instances/x/work/test/y.test.mjs",
+    "agents/soul/instances/x/work/lib/parser.test.mjs",
+    "agents/soul/instances/x/notes/deep/tree/z.test.mjs",
+  ]);
+  assert.deepEqual(coverageProblems(["test/alpha.test.mjs"], exempt), []);
+});
+
 test("coverage guard REFUSES a symlinked directory under a test tree", (t) => {
   // NOBODY follows it: node does not traverse a symlinked directory, and readdir
   // reports a link rather than a directory, so inventorySuites' recursion skips

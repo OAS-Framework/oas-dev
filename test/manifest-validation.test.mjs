@@ -780,3 +780,69 @@ test("propertyNames.minLength is APPLIED, not merely declared covered", () => {
   assert.ok(schemaProblems(lock, lockSchema, "oas-lock.json").length,
     "an EMPTY capability id must be refused — that is what propertyNames.minLength is there for");
 });
+
+test("a sibling of oneOf is a CONSTRAINT, not dead text", () => {
+  // The positional gap this closes, and it was live in a vendored schema: the
+  // branch loop returned, so `type` and `required` sitting beside a `oneOf` were
+  // never asserted at all. Both directions, because "always fails" would pass a
+  // one-sided fixture just as happily.
+  const schema = { type: "object", required: ["a"], oneOf: [{ properties: { a: { type: "string" } } }, { properties: { a: { type: "number" } } }] };
+  assert.deepEqual(schemaProblems({ a: "x" }, schema), [], "a document satisfying every constraint stays valid");
+  assert.match(schemaProblems("not an object", schema).join(" "), /must be object/,
+    "the sibling `type` must be applied");
+  assert.match(schemaProblems({ b: 1 }, schema).join(" "), /missing required property a/,
+    "the sibling `required` must be applied");
+  // The alternation itself still works beside them.
+  assert.match(schemaProblems({ a: true }, schema).join(" "), /matches none of the allowed forms/);
+});
+
+test("the vendored lock schema's ROOT type and required are live constraints", () => {
+  // The concrete instance: `schemas/oas-lock.schema.json` carries
+  // `type: "object"` and `required: ["lockfileVersion"]` beside its two-branch
+  // `oneOf`, and both were dead code until the sibling fix. A lock missing
+  // `lockfileVersion` entirely must be refused BY THAT KEYWORD, not only by
+  // whichever branch happens to list it.
+  // EXACT problem lines, not a substring of the joined report: every `oneOf`
+  // branch also requires `lockfileVersion`, so the aggregated "matches none of
+  // the allowed forms (…)" message quotes that phrase whether the root keyword
+  // fired or not. Only the problem reported AT THE ROOT distinguishes the two.
+  const lockSchema = JSON.parse(readFileSync(join(REPO, "schemas", "oas-lock.schema.json"), "utf8"));
+  assert.ok(schemaProblems({}, lockSchema, "oas-lock.json").includes("oas-lock.json: missing required property lockfileVersion"),
+    "the ROOT `required` must report on its own, not only from inside a branch");
+  assert.ok(schemaProblems("lockfileVersion: 2", lockSchema, "oas-lock.json").includes("oas-lock.json: must be object, got string"),
+    "the ROOT `type` must report on its own");
+  // …and a valid lock is still valid, or "always fails" would pass the above.
+  assert.deepEqual(schemaProblems({
+    lockfileVersion: 2,
+    packages: { "oas.dev": { source: "catalog:oas.dev@v2.0.0", commit: "0".repeat(40), version: "2.0.0", integrity: `sha256-${"0".repeat(64)}`, path: "oas-package", dependencies: [] } },
+    capabilities: { "oas.review": { version: "2.0.0", package: "oas.dev", path: "capabilities/oas-review", integrity: `sha256-${"0".repeat(64)}`, trusted: false } },
+  }, lockSchema, "oas-lock.json"), []);
+});
+
+test("a sibling of $ref is applied too, rather than replaced by the target", () => {
+  // Same early return, same fix. `$ref` in 2020-12 does not replace the schema
+  // object it sits in; anything beside it still constrains.
+  const schema = { $defs: { obj: { type: "object" } }, $ref: "#/$defs/obj", required: ["a"] };
+  assert.deepEqual(schemaProblems({ a: 1 }, schema), [], "a document satisfying both stays valid");
+  assert.match(schemaProblems({ b: 1 }, schema).join(" "), /missing required property a/,
+    "the sibling `required` must be applied");
+  assert.match(schemaProblems("nope", schema).join(" "), /must be object/,
+    "…and the $ref target still is");
+});
+
+test("tuple-form items is REPORTED, because nothing here applies it", () => {
+  // The third silent position. `items: [A, B]` positionally constrains the first
+  // elements; checkSchema hands the whole ARRAY to every element as if it were
+  // one subschema, which asserts nothing. No vendored schema uses the form, so
+  // it is reported rather than half-implemented.
+  assert.deepEqual(unsupportedKeywords({ items: [{ type: "string" }, { type: "number" }] }), ["#/items"]);
+  assert.deepEqual(
+    unsupportedKeywords({ properties: { rows: { type: "array", items: [{ type: "string" }] } } }),
+    ["#/properties/rows/items"]);
+  // The SINGLE-subschema form is what the evaluator implements, and it stays
+  // unreported — and applied.
+  assert.deepEqual(unsupportedKeywords({ items: { type: "string" } }), []);
+  assert.match(schemaProblems([1], { type: "array", items: { type: "string" } }).join(" "), /must be string/);
+  // `allOf`/`oneOf` are legally lists and must not be caught by the same rule.
+  assert.deepEqual(unsupportedKeywords({ allOf: [{ type: "string" }], oneOf: [{ type: "string" }] }), []);
+});

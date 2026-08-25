@@ -1036,6 +1036,34 @@ check("EVERY capability in the lock is trusted according to its OWN surface", ()
   return `gated: ${gated.join(", ")}; no surface: ${inert.join(", ")}`;
 });
 
+check("oas.aweb's REQUIRED hook is measured from its materialized manifest, not remembered", () => {
+  // The README says oas.aweb carries a **required** `spawn` hook and an OPTIONAL
+  // `retire` hook, and test/readme-claims.test.mjs pins that wording while
+  // calling it "measured against the artifact by the probe". It was not:
+  // nothing here had ever read the flag, so the offline suite was pinning a
+  // sentence against a measurement that did not exist. It exists now.
+  //
+  // The manifest read is the MATERIALIZED one — the bytes the adopter's kernel
+  // will execute — and the capability schema's own rule is that only `spawn`
+  // may be required, so both halves are asserted: the flag that IS set, and the
+  // hook that must not carry it.
+  const manifestPath = join(installedDir(profile, "oas.aweb"), "oas.json");
+  assert(existsSync(manifestPath), `oas.aweb's materialized manifest is not at ${manifestPath}`);
+  const hooks = readJson(manifestPath).hooks || {};
+  const isRequired = (hook) => hook !== null && typeof hook === "object" && hook.required === true;
+  assert(hooks.spawn, `oas.aweb declares no spawn hook: ${JSON.stringify(hooks)}`);
+  assert(isRequired(hooks.spawn),
+    `oas.aweb's spawn hook must be required:true — the README says so: ${JSON.stringify(hooks.spawn)}`);
+  assert(hooks.retire, `oas.aweb declares no retire hook: ${JSON.stringify(hooks)}`);
+  assert(!isRequired(hooks.retire),
+    `oas.aweb's retire hook must NOT be required — only spawn runs inside a spawn transaction: ${JSON.stringify(hooks.retire)}`);
+  // …and the README's own words, checked against what was just read rather than
+  // against a reviewer's memory of the manifest.
+  assert(/required\*{0,2}\s*`spawn`\s*hook/.test(README_TEXT), "the README must name `spawn` as the required hook");
+  assert(/optional\s*`retire`\s*hook/.test(README_TEXT), "…and `retire` as the optional one");
+  return `spawn required:true; retire declared as ${typeof hooks.retire === "string" ? "a plain string" : "an object"}, not required`;
+});
+
 check("the README's trust posture names EVERY capability this run had to trust", () => {
   // The blocker this closes: the README said "there is nothing to trust", which
   // was true of oas.review and false of the workspace — while THIS probe was
