@@ -12,6 +12,7 @@ import {
   installSourceProblems,
   installSources,
   pinnedRef,
+  quotedKernelMessages,
   refusedSpellings,
 } from "../scripts/lib/readme-install-sources.mjs";
 
@@ -51,6 +52,8 @@ const SOUND = [
   "| `oas.dev@v2.0.0` | official catalog id with a selector |",
   "",
   "- `catalog:oas.dev@v2.0.0` — the lock's normalized spelling, refused as a source",
+  "",
+  '  > `"catalog:oas.dev@v2.0.0" is not a git source, local path, or official catalog id`',
   "",
   "## Use",
   "",
@@ -92,6 +95,56 @@ test("the README names BOTH normalized lock spellings as refused", () => {
   for (const [prefix] of NORMALIZED_LOCK_PREFIXES) {
     assert.ok(refused.some((s) => s.startsWith(prefix)), `no refusal documented for the ${prefix}… spelling a lock prints`);
   }
+});
+
+test("every refused spelling is documented with a VERBATIM kernel quote", () => {
+  // The offline half checks the shape; the probe checks the characters against
+  // the released parser. A refusal with no quote opts out of that comparison,
+  // and a quote that paraphrases the message (dropping the angle brackets from
+  // `[#<path>]`, or the offending spec the kernel echoes back) is exactly the
+  // defect the probe exists to catch, so it must be impossible to ship it
+  // silently.
+  const refused = refusedSpellings(README);
+  const quoted = quotedKernelMessages(README);
+  assert.equal(quoted.length, refused.length,
+    `each refused spelling needs its own "> \`…\`" verbatim quote; got ${quoted.length} for ${refused.length}`);
+  for (const { spelling } of refused) {
+    assert.ok(quoted.some(({ message }) => message.includes(spelling)),
+      `no verbatim kernel quote echoes ${JSON.stringify(spelling)}`);
+  }
+  // The two message shapes the released 0.20.0 parser throws for these, quoted
+  // here as a second, independent copy: if the README is edited to something
+  // the kernel does not say, either this or the probe reports it.
+  const messages = quoted.map((q) => q.message);
+  assert.ok(messages.includes('"catalog:oas.dev@v2.0.0" is not a git source, local path, or official catalog id'),
+    `the catalog: refusal is not quoted verbatim: ${JSON.stringify(messages)}`);
+  assert.ok(messages.includes('git shorthand must be git:host/org/repo[@ref][#<path>]: "git:https://github.com/OAS-Framework/oas-dev.git@v2.0.0"'),
+    `the git: shorthand refusal is not quoted verbatim: ${JSON.stringify(messages)}`);
+});
+
+test("a refusal that quotes nothing, or paraphrases, is REPORTED", () => {
+  // Adversarial fixtures for the rule above, in both of its failure shapes.
+  const unquoted = SOUND.split("\n").filter((line) => !line.trim().startsWith("> `")).join("\n");
+  assert.equal(matching(unquoted, /must quote the released kernel's message verbatim/).length, 1,
+    problemsFor(unquoted).join("\n"));
+
+  const paraphrased = SOUND.replace(
+    '  > `"catalog:oas.dev@v2.0.0" is not a git source, local path, or official catalog id`',
+    "  > `is not a git source, local path, or official catalog id`");
+  assert.equal(matching(paraphrased, /has been paraphrased/).length, 1, problemsFor(paraphrased).join("\n"));
+});
+
+test("a SOFT-WRAPPED quote is not a verbatim quote", () => {
+  // A kernel message has no newline in it. Joining two Markdown lines back
+  // together would invent the whitespace that separated them, so a wrapped
+  // quote matches nothing and is reported as missing rather than accepted as
+  // approximately right.
+  const readme = SOUND.replace(
+    '  > `"catalog:oas.dev@v2.0.0" is not a git source, local path, or official catalog id`',
+    '  > `"catalog:oas.dev@v2.0.0" is not a git source,\n  >   local path, or official catalog id`');
+  assert.deepEqual(quotedKernelMessages(readme).map((q) => q.message), []);
+  const single = quotedKernelMessages(SOUND).map((q) => q.message);
+  assert.deepEqual(single, ['"catalog:oas.dev@v2.0.0" is not a git source, local path, or official catalog id']);
 });
 
 test("every runnable install command in the README pins this release", () => {

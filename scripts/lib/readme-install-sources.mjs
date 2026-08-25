@@ -196,6 +196,40 @@ export function refusedSpellings(readme, heading = SPELLINGS_HEADING) {
 }
 
 /**
+ * The kernel messages the README quotes VERBATIM, one per blockquoted code span
+ * in the spellings section:
+ *
+ *     > `git shorthand must be git:host/org/repo[@ref][#<path>]: "…"`
+ *
+ * A dedicated line shape, not "every code span in the section": the prose is
+ * full of incidental spans (`:`, `throw`, the spellings themselves), and a
+ * scanner that collected those could not tell a quote from a mention.
+ *
+ * ONE LINE, deliberately. A kernel message contains no newline, so a quote that
+ * was soft-wrapped across two Markdown lines is no longer the string the kernel
+ * throws — and joining the pieces here would invent whitespace the message never
+ * had. A wrapped quote therefore matches NOTHING and is reported as a missing
+ * quote, which is the honest outcome. (Runs of whitespace INSIDE the one line
+ * are collapsed, so an editor's re-indentation cannot break an exact match.)
+ *
+ * The offline suite checks the SHAPE (every refused spelling carries a quote);
+ * the consumer probe checks the CONTENT, against the message the released
+ * parser actually throws. Neither can be done by the other: only the kernel
+ * knows its own text, and only the offline gate runs on every push.
+ *
+ * @returns {{message: string, line: number}[]} in document order
+ */
+export function quotedKernelMessages(readme, heading = SPELLINGS_HEADING) {
+  const out = [];
+  const lines = sectionLines(readme, heading);
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = /^\s*>\s+`(.+)`\s*$/.exec(lines[i].text);
+    if (m) out.push({ message: m[1].replace(/\s+/g, " ").trim(), line: lines[i].line });
+  }
+  return out;
+}
+
+/**
  * Everything wrong with the sources a README documents, checked WITHOUT the
  * kernel so `npm test` covers it offline. The probe additionally proves each
  * accepted spelling parses under the released kernel and each refused spelling
@@ -213,6 +247,21 @@ export function installSourceProblems(readme, { tag = RELEASE_TAG } = {}) {
 
   if (!accepted.length) problems.push(`the README has no accepted-spelling table under ${JSON.stringify(SPELLINGS_HEADING)} — the spellings a consumer may type are the one thing this package cannot leave undocumented`);
   if (!refused.length) problems.push(`the README names no REFUSED spelling under ${JSON.stringify(SPELLINGS_HEADING)} — the lock's normalized forms look like sources and are not, and a table of accepted spellings alone never says so`);
+
+  // A refusal the README does not QUOTE is a refusal nothing can check against
+  // the kernel: the probe compares quoted text to the thrown message, so an
+  // unquoted (or paraphrased-away) bullet would silently opt out of that check.
+  const quoted = quotedKernelMessages(readme);
+  if (refused.length && quoted.length !== refused.length) {
+    problems.push(`the README names ${refused.length} refused spelling(s) but quotes ${quoted.length} kernel message(s) under ${JSON.stringify(SPELLINGS_HEADING)} — each refusal must quote the released kernel's message verbatim on its own "> \`…\`" line, because the consumer probe checks those quotes character for character against what the parser actually throws`);
+  }
+  for (const { message, line } of quoted) {
+    // The message the kernel throws for these two always echoes the offending
+    // spec back, so a quote that names no spelling is a paraphrase.
+    if (!refused.some(({ spelling }) => message.includes(spelling))) {
+      problems.push(`README line ${line} quotes ${JSON.stringify(message)} as a kernel message, but it names none of the refused spellings ${JSON.stringify(refused.map((r) => r.spelling))} — the kernel echoes the offending spec, so a quote without one has been paraphrased`);
+    }
+  }
   if (!commands.length) problems.push("the README documents no runnable install command — a package whose README never shows how to acquire it is not documented");
 
   // Accepted spellings and runnable commands are held to the same pinning rule:

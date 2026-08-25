@@ -10,8 +10,11 @@ Official OAS-project development policy package. It combines:
 
 The distribution package is `oas.dev@2.0.0` on the **0.20 capability-materialization
 contract** (`compatibility.oas: ">=0.20.0"`). The inner capability keeps its own
-`oas.review` identity and moves in lockstep with the package, so a lock row and a
-`--json` envelope name the two versions separately and they always agree.
+`oas.review` identity, and **this release is where the two adopt lockstep
+versioning**: `oas.review` moves 1.2.0 → 2.0.0 to match the package. The kernel
+does not require that — a lock row and a `--json` envelope name the two versions
+separately — so it is a convention this repository enforces, from 2.0.0 onward,
+in `scripts/validate-manifests.mjs`.
 
 ## What changed in 2.0.0
 
@@ -23,6 +26,7 @@ adopts the canonical shape rather than the readable-but-deprecated one:
 | template declaration | `configs` | **`configTemplates`** (the deprecated key may not coexist with it) |
 | template location | `configs/default/oas-config.yaml` | **`config-templates/default/oas-config.yaml`** |
 | capability root | `capabilities/oas-review` | unchanged — a **dedicated** root, now mandatory beside `configTemplates` |
+| exported capability version | `oas.review@1.2.0` (versioned independently) | **`oas.review@2.0.0`** — the package/capability lockstep starts here |
 | dependencies | `oas.okf@v1.4.1`, `oas.aweb@v1.8.0`, `oas.authoring@v1.0.0` | **`oas.okf@v2.0.0`, `oas.aweb@v2.0.0`, `oas.authoring@v2.0.0`** |
 | kernel floor | `>=0.19.0` | **`>=0.20.0`** |
 
@@ -62,21 +66,43 @@ Two spellings that look right and are **refused**, both of them things a lock
 prints rather than things you type:
 
 - `catalog:oas.dev@v2.0.0` — `:` is outside the catalog-id alphabet, so the
-  parser reaches its final `throw`: *"is not a git source, local path, or
-  official catalog id"*. Drop the prefix.
+  parser reaches its final `throw`. Drop the prefix. The released 0.20.0 kernel
+  says, verbatim:
+
+  > `"catalog:oas.dev@v2.0.0" is not a git source, local path, or official catalog id`
+
 - `git:https://github.com/OAS-Framework/oas-dev.git@v2.0.0` — after `git:` the
-  parser wants `host/org/repo`, and a URL's `//` makes an empty segment:
-  *"git shorthand must be git:host/org/repo[@ref][#path]"*. Use the raw URL, or
-  the three-segment shorthand.
+  parser wants `host/org/repo`, and a URL's `//` makes an empty segment. Use the
+  raw URL, or the three-segment shorthand. Verbatim:
+
+  > `git shorthand must be git:host/org/repo[@ref][#<path>]: "git:https://github.com/OAS-Framework/oas-dev.git@v2.0.0"`
+
+Both quotes above are the kernel's own strings, character for character —
+including the angle-bracketed `<path>` and the offending spec the message echoes
+back. The consumer probe compares each one against the message the released
+parser actually throws, so a paraphrase here fails the probe rather than
+misleading a reader.
 
 **Why the selector is not optional.** The 0.20.0 kernel ships a bundled catalog
 in which `oas.dev` still points at `v1.0.0` (and `oas.okf` / `oas.aweb` /
 `oas.authoring` at their v1 tags). A bare `oas.dev` therefore installs v1 until
 that catalog is refreshed; `oas.dev@v2.0.0` overrides the entry's ref and
 installs this release, and this package's own dependency selectors do the same
-for the closure. The catalog is overridable only through the
-`OAS_PACKAGE_CATALOG` environment variable, and a missing catalog file reads as
-an empty catalog — where the Git spellings above are the way in.
+for the closure.
+
+**And the catalog is not optional either.** It is overridable only through the
+`OAS_PACKAGE_CATALOG` environment variable, and an override **REPLACES** the
+bundled catalog outright — there is no merge, and a missing or unreadable file
+reads as an *empty* catalog. That is a whole-closure concern, not just a matter
+of how you spell `oas.dev`: this package's three dependencies
+(`oas.okf@v2.0.0`, `oas.aweb@v2.0.0`, `oas.authoring@v2.0.0`) are **catalog
+selectors**, and the kernel resolves each of them through whatever catalog is in
+force. Against an empty or partial catalog, acquisition fails resolving
+`oas.okf@v2.0.0` — and the Git spellings above cannot rescue it, because they
+name the ROOT package's source and say nothing about where its dependencies come
+from. So a catalog you supply must itself carry `oas.okf`, `oas.aweb` and
+`oas.authoring` entries (plus an `oas.dev` entry whenever `oas.dev` is installed
+by catalog id rather than by Git URL or path).
 
 A selector is a **Git ref**, not a semver range: `oas.dev@2.0.0` parses, then
 fails to resolve, because the tag is `v2.0.0`.
@@ -173,15 +199,36 @@ oas use oas.review --type developers --dir /path/to/scope
 oas doctor /path/to/scope --soul some-developer-soul
 ```
 
-**Trust posture: there is nothing to trust.** `oas.review` declares no commands
-and no lifecycle hooks — it ships an agent definition, two skills and one
-instruction injection, and nothing in it executes. It therefore needs no
-per-capability executable approval, and `oas trust` says exactly that rather
-than granting anything. The executable surface in a workspace built from this
-template belongs to the *dependencies* (`oas.aweb`'s `aw` dispatch and hooks),
-each gated on its own and bound to its own artifact integrity. The reviewer
-delivers its verdict over whatever messaging layer the deployment configures —
-this package configures none of its own.
+**Trust posture: `oas.review` has nothing to trust; the workspace has two things
+that do.** Trust in OAS is per capability, never per package, so the closure's
+executable surface has to be enumerated capability by capability:
+
+| Capability | Executable surface | `oas trust` |
+| --- | --- | --- |
+| `oas.review` | none — an agent definition, two skills, one instruction injection | approves nothing; reports *no executable surface (artifact integrity suffices)* |
+| `oas.okf` | command namespace `okf` with the `harvest` command, plus the `soul-scaffold` and `spawn` lifecycle hooks | **required** — `oas trust oas.okf` |
+| `oas.aweb` | the `aweb` command namespace (`roster`, `setup`), the `aw` dispatch its skills drive, and required `spawn` / `retire` hooks | **required** — `oas trust oas.aweb` |
+
+So a workspace built from this template needs **two** approvals, one per
+executable dependency, and each binds to *that capability's own materialized
+artifact integrity* — re-materializing one resets only its own approval. Neither
+is inherited from the other, and neither is granted by trusting `oas.dev`: there
+is no package-level approval to grant.
+
+This is not a formality for the knowledge layer. The OKF protocol these agents
+run under ends every commit with `oas okf harvest`, and that command is part of
+`oas.okf`'s executable surface: **until `oas trust oas.okf` is given, the harvest
+step cannot run and notes never reach the soul.**
+
+`oas.review` remains the exception rather than the rule: it declares no
+`commands` and no `hooks`, so `oas trust oas.review` reports that plainly instead
+of granting anything, and the lock's `trusted` flag for it stays `false` with no
+loss of function. The reviewer delivers its verdict over whatever messaging layer
+the deployment configures — this package configures none of its own.
+
+Probe check 7 proves all three outcomes against the released kernel in one run:
+`oas.review` approved `[]` / skipped, and `oas.okf` and `oas.aweb` each approved
+at their own artifact integrity.
 
 ## Development
 
