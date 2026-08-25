@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -37,6 +37,11 @@ const SHIPPED_TEMPLATE = readFileSync(join(PAYLOAD, ...TEMPLATE_PATH.split("/"))
 
 const CANONICAL_DEPENDENCIES = ["oas.okf@v2.0.0", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"];
 
+/** The vendored 0.20 schemas the gate requires. Read from disk rather than
+ * listed, so a schema added to `schemas/` cannot be forgotten here — the
+ * fail-closed tests below then cover it automatically. */
+const VENDORED_SCHEMAS = readdirSync(join(REPO, "schemas")).filter((n) => n.endsWith(".schema.json")).sort();
+
 /**
  * Build a throwaway repository around the REAL validator and run it.
  *
@@ -51,6 +56,12 @@ const CANONICAL_DEPENDENCIES = ["oas.okf@v2.0.0", "oas.aweb@v2.0.0", "oas.author
  * @param links symlinks [linkPath, targetRelativeToPayload]
  * @param outsideLinks symlinks [linkPath, targetRelativeToFixtureRoot] — these
  *   escape the package payload entirely
+ * @param templateLink when set, the template descriptor's path is created as a
+ *   SYMLINK to this payload-relative file instead of as a regular file
+ * @param omitSchemas vendored schema filenames NOT to copy into the fixture, so
+ *   the gate's fail-closed schema loading can be exercised
+ * @param schemaOverrides raw contents to write at schemas/<name>, written after
+ *   the vendored copies, so a schema can be corrupted rather than removed
  */
 function runFixture(t, {
   capabilityDirs = [CAPABILITY_DIR],
@@ -60,6 +71,9 @@ function runFixture(t, {
   files = {},
   links = [],
   outsideLinks = [],
+  templateLink = null,
+  omitSchemas = [],
+  schemaOverrides = {},
 } = {}) {
   const fixture = mkdtempSync(join(tmpdir(), "oas-dev-manifest-"));
   t.after(() => rmSync(fixture, { recursive: true, force: true }));
@@ -68,11 +82,19 @@ function runFixture(t, {
   mkdirSync(join(fixture, "oas-package"), { recursive: true });
 
   copyFileSync(join(REPO, "scripts", "validate-manifests.mjs"), join(fixture, "scripts", "validate-manifests.mjs"));
-  for (const lib of ["kernel-yaml.mjs", "config-portability.mjs"]) {
+  for (const lib of ["kernel-yaml.mjs", "config-portability.mjs", "json-schema.mjs"]) {
     copyFileSync(join(REPO, "scripts", "lib", lib), join(fixture, "scripts", "lib", lib));
   }
-  for (const schema of ["oas-package", "capability-manifest"]) {
-    copyFileSync(join(REPO, "schemas", `${schema}.schema.json`), join(fixture, "schemas", `${schema}.schema.json`));
+  // ALL FOUR vendored schemas, because the validator now REQUIRES all four to
+  // exist and load. A fixture that shipped two of them would have been a
+  // fixture running against a gate with two of its rules switched off — which
+  // is the very defect the schema-deletion tests below pin.
+  for (const schema of VENDORED_SCHEMAS) {
+    if (omitSchemas.includes(schema)) continue;
+    copyFileSync(join(REPO, "schemas", schema), join(fixture, "schemas", schema));
+  }
+  for (const [name, contents] of Object.entries(schemaOverrides)) {
+    writeFileSync(join(fixture, "schemas", name), contents);
   }
 
   const write = (relative, contents) => {
@@ -94,7 +116,7 @@ function runFixture(t, {
     ...packageExtras,
   }, null, 2) + "\n");
 
-  if (template !== null) write(TEMPLATE_PATH, template);
+  if (template !== null && !templateLink) write(TEMPLATE_PATH, template);
   for (const [relative, contents] of Object.entries(files)) write(relative, contents);
 
   for (const capabilityDir of capabilityDirs) {
@@ -116,6 +138,9 @@ function runFixture(t, {
   };
   for (const [linkPath, target] of links) link(linkPath, join(fixture, "oas-package", target));
   for (const [linkPath, target] of outsideLinks) link(linkPath, join(fixture, target));
+  // Written last: the link target has to exist, and `write` would have created
+  // a regular file at the very path this replaces.
+  if (templateLink) link(TEMPLATE_PATH, join(fixture, "oas-package", templateLink));
 
   return spawnSync(process.execPath, [join(fixture, "scripts", "validate-manifests.mjs")], {
     cwd: fixture,
@@ -582,3 +607,101 @@ test("validator rejects a template descriptor pointing at nothing", (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /config template does not exist/);
 });
+
+// ---------------------------------------------------------------------------
+// GATE=PASS / KERNEL=FAIL. The one class of defect a repo gate must never have:
+// a package that ships green from here and is refused at the adopter's install.
+// ---------------------------------------------------------------------------
+
+test("validator rejects a template path that is a SYMLINK to a good file", (t) => {
+  // loadPackageManifest in the released 0.20.0 kernel writes
+  //     if (!lstatSync(p).isFile()) throw … "path is not a file"
+  // so a symlink is refused however good its target is. This gate used to
+  // `statSync(realpathSync(p))`, which follows the link and passes — the exact
+  // gate-PASS/kernel-FAIL split that lets an invalid package be published.
+  const result = runFixture(t, {
+    templateLink: "config-templates/default/real-oas-config.yaml",
+    files: { "config-templates/default/real-oas-config.yaml": SHIPPED_TEMPLATE },
+  });
+  assert.equal(result.status, 1, "a symlinked template must be refused here, exactly as the kernel refuses it");
+  assert.match(result.stderr, /config template is not a file/);
+  assert.match(result.stderr, /SYMLINK/, "the diagnostic must say WHY a perfectly readable file was refused");
+});
+
+test("validator still accepts an ordinary template file", (t) => {
+  // Non-vacuity for the rule above: the lstat check must reject links, not
+  // files. (The baseline covers this too; stated here so the pair reads
+  // together.)
+  const result = runFixture(t, { template: SHIPPED_TEMPLATE });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+// ---------------------------------------------------------------------------
+// FAIL CLOSED on the vendored schemas. A validator that silently skips a rule
+// whose file went missing reports success for work it did not do.
+// ---------------------------------------------------------------------------
+
+for (const schema of VENDORED_SCHEMAS) {
+  test(`validator FAILS when schemas/${schema} is missing, naming it`, (t) => {
+    const result = runFixture(t, { omitSchemas: [schema] });
+    assert.equal(result.status, 1,
+      `deleting ${schema} must fail the gate, not quietly switch its validation off`);
+    assert.match(result.stderr, new RegExp(`schemas/${schema.replaceAll(".", "\\.")}: vendored .* schema is MISSING`));
+  });
+}
+
+test("validator FAILS when a vendored schema is present but unreadable", (t) => {
+  // Present-and-broken is the sibling of missing, and the more likely accident:
+  // a truncated file, a merge conflict marker, a half-written vendoring. Either
+  // way the rule is gone, so either way the gate must refuse rather than run
+  // with it silently switched off.
+  const truncated = runFixture(t, { schemaOverrides: { "oas-config.schema.json": '{"type": "obj' } });
+  assert.equal(truncated.status, 1);
+  assert.match(truncated.stderr, /vendored config schema is unreadable/);
+
+  const notASchema = runFixture(t, { schemaOverrides: { "capability-manifest.schema.json": "[]\n" } });
+  assert.equal(notASchema.status, 1);
+  assert.match(notASchema.stderr, /vendored capability schema is not a JSON Schema object/);
+});
+
+test("all four vendored schemas are present in the repository", () => {
+  // The list the gate requires, pinned against the directory, so a schema
+  // deleted from `schemas/` fails here even before the gate is reached.
+  assert.deepEqual(VENDORED_SCHEMAS, [
+    "capability-manifest.schema.json",
+    "oas-config.schema.json",
+    "oas-lock.schema.json",
+    "oas-package.schema.json",
+  ]);
+});
+
+// ---------------------------------------------------------------------------
+// CRASH-TO-DIAGNOSTIC. A schema violation is REPORTED, so the code after it
+// keeps walking — and a mistyped list reached `.entries()` and killed the gate
+// with a TypeError that named no path and printed no report.
+// ---------------------------------------------------------------------------
+
+for (const key of ["skills", "agents"]) {
+  test(`a capability manifest with ${key} as a STRING is a report, not a crash`, (t) => {
+    const result = runFixture(t, { capability: { [key]: `${key}/demo` } });
+    assert.equal(result.status, 1, `${key} as a string must fail the gate`);
+    assert.match(result.stderr, /Manifest validation failed/,
+      "the gate must produce its report; a TypeError stack means it died mid-walk");
+    assert.doesNotMatch(result.stderr, /TypeError|is not a function|is not iterable/,
+      `${key} as a string crashed the validator instead of being reported`);
+    assert.match(result.stderr, new RegExp(`oas\\.json\\.${key}.*must be (an array|array)`),
+      `the diagnostic must name ${key} and say what it should be`);
+  });
+}
+
+for (const key of ["commands", "hooks"]) {
+  test(`a capability manifest with ${key} as a STRING is reported, not iterated as characters`, (t) => {
+    // Object.entries does not crash on a string — it enumerates CHARACTERS, so
+    // the gate would have validated entrypoints named "0", "1", "2" and said
+    // nothing useful about the real mistake.
+    const result = runFixture(t, { capability: { [key]: "bin/tool.mjs" } });
+    assert.equal(result.status, 1);
+    assert.doesNotMatch(result.stderr, /entrypoint.*"0"|\.0:/, "characters must not be validated as entries");
+    assert.match(result.stderr, new RegExp(`oas\\.json\\.${key}.*must be a map`));
+  });
+}

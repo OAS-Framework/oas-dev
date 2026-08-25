@@ -21,9 +21,10 @@
  *   KERNEL      canonical `configTemplates` spelling; template paths under
  *               config-templates/; `configTemplates` and the deprecated
  *               `configs` may not coexist; a dedicated capability root (never
- *               ".") once configTemplates ships; per-capability
- *               self-containment after symlink resolution; dependencies are
- *               package SOURCE SPECS, not capability ids.
+ *               ".") once configTemplates ships; a template path that lstats as
+ *               a FILE (a symlink is refused, target notwithstanding);
+ *               per-capability self-containment after symlink resolution;
+ *               dependencies are package SOURCE SPECS, not capability ids.
  *   CONVENTION  oas.dev 2.0.0 in lockstep with oas.review 2.0.0 (the kernel does
  *               NOT require package version == capability version); the exact
  *               three pinned dependencies; the >=0.20.0 floor on both manifests.
@@ -33,6 +34,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractComments, parseKernelYaml } from "./lib/kernel-yaml.mjs";
 import { commentLeaks, valueLeaks } from "./lib/config-portability.mjs";
+import { checkSchema } from "./lib/json-schema.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = join(repoRoot, "oas-package");
@@ -86,58 +88,44 @@ function refuseProtoKeys(value, at) {
   }
 }
 
-/** Minimal JSON-Schema evaluator covering the keywords our vendored schemas
- * actually use. `collect` gathers errors instead of reporting them, so oneOf
- * branches can be tried without polluting the real error list. */
-function checkSchema(value, schema, at, rootSchema, collect) {
-  const emit = collect || report;
-  if (schema === true || schema === undefined) return;
-  if (schema === false) { emit(at, "is not allowed here"); return; }
-  if (typeof schema !== "object") return;
-  if (schema.$ref) {
-    const target = schema.$ref.startsWith("#/$defs/") ? rootSchema?.$defs?.[schema.$ref.slice("#/$defs/".length)] : undefined;
-    if (target) checkSchema(value, target, at, rootSchema, collect);
-    return;
+/** The shared evaluator (scripts/lib/json-schema.mjs), wired to this gate's
+ * error list. Shared with the consumer probe, which validates a real generated
+ * lock against the vendored lock schema. */
+const validateSchema = (value, schema, at) => checkSchema(value, schema, at, schema, report);
+
+/**
+ * A declared LIST resource, or a diagnostic if the manifest did not declare a
+ * list at all.
+ *
+ * `manifest.skills` and `manifest.agents` are arrays by schema, but a schema
+ * error is REPORTED, not thrown — so the code after it kept walking, and
+ * `"skills": "skills/demo"` (a string, the single-entry spelling a person
+ * reaches for) reached `.entries()` and crashed the gate with a TypeError. A
+ * crash is the worst possible outcome here: it names no path, produces no
+ * "Manifest validation failed" report, and reads as a broken tool rather than
+ * as a bad manifest. Every non-array is now degraded to an empty iteration, and
+ * the schema violation stands on its own as the diagnostic.
+ */
+function declaredList(value, at, kind) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    report(at, `${kind} must be an array of package-relative paths, got ${value === null ? "null" : typeof value} — a single entry is still written as a one-element array`);
+    return [];
   }
-  if (schema.allOf) for (const sub of schema.allOf) checkSchema(value, sub, at, rootSchema, collect);
-  if (schema.oneOf) {
-    const failures = schema.oneOf.map((sub) => { const bucket = []; checkSchema(value, sub, at, rootSchema, (p, m) => bucket.push(`${p}: ${m}`)); return bucket; });
-    if (!failures.some((bucket) => bucket.length === 0)) emit(at, `matches none of the allowed forms (${failures.flat().join("; ")})`);
-    return;
-  }
-  if ("const" in schema && !Object.is(value, schema.const)) emit(at, `must be ${JSON.stringify(schema.const)}`);
-  if (schema.enum && !schema.enum.some((item) => Object.is(item, value))) emit(at, `must be one of ${schema.enum.join(", ")}`);
-  const actual = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
-  if (schema.type && actual !== schema.type) { emit(at, `must be ${schema.type}, got ${actual}`); return; }
-  if (typeof value === "string") {
-    if (schema.minLength !== undefined && value.length < schema.minLength) emit(at, `must contain at least ${schema.minLength} character(s)`);
-    if (schema.pattern && !(new RegExp(schema.pattern)).test(value)) emit(at, `must match ${schema.pattern}`);
-    if (schema.not?.pattern && (new RegExp(schema.not.pattern)).test(value)) emit(at, `must not match ${schema.not.pattern}`);
-  }
-  if (Array.isArray(value)) {
-    if (schema.minItems !== undefined && value.length < schema.minItems) emit(at, `must contain at least ${schema.minItems} item(s)`);
-    if (schema.uniqueItems && new Set(value.map((item) => JSON.stringify(item))).size !== value.length) emit(at, "must contain unique items");
-    value.forEach((item, index) => checkSchema(item, schema.items, `${at}[${index}]`, rootSchema, collect));
-  }
-  if (value && actual === "object") {
-    // OWN properties only, everywhere. `"constructor" in {}` is true — as are
-    // toString, valueOf, hasOwnProperty and five more — so an `in` test against
-    // a schema's `properties` map dispatches an inherited FUNCTION as if it were
-    // a subschema, and `additionalProperties: false` never fires. A manifest
-    // carrying a root `constructor:` key would then pass this gate and be
-    // rejected only later, by the kernel, in the adopter's deployment.
-    for (const key of schema.required || []) if (!Object.hasOwn(value, key)) emit(at, `missing required property ${key}`);
-    const properties = schema.properties || {};
-    for (const [key, item] of Object.entries(value)) {
-      if (schema.propertyNames?.pattern && !(new RegExp(schema.propertyNames.pattern)).test(key)) emit(`${at}.${key}`, `property name must match ${schema.propertyNames.pattern}`);
-      if (Object.hasOwn(properties, key)) checkSchema(item, properties[key], `${at}.${key}`, rootSchema, collect);
-      else if (schema.additionalProperties === false) emit(`${at}.${key}`, "unknown property");
-      else if (schema.additionalProperties && typeof schema.additionalProperties === "object") checkSchema(item, schema.additionalProperties, `${at}.${key}`, rootSchema, collect);
-    }
-  }
+  return value;
 }
 
-const validateSchema = (value, schema, at) => checkSchema(value, schema, at, schema, undefined);
+/** The same treatment for a declared MAP (`commands`, `hooks`). `Object.entries`
+ * does not crash on a string, which is worse: it silently iterates CHARACTERS
+ * and validates entrypoints named "0", "1", "2". */
+function declaredMap(value, at, kind) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    report(at, `${kind} must be a map of name → entrypoint, got ${value === null ? "null" : Array.isArray(value) ? "array" : typeof value}`);
+    return {};
+  }
+  return value;
+}
 
 /**
  * A declared resource path, resolved and bounded.
@@ -198,11 +186,53 @@ function isCanonicalTemplatePath(p) {
   return !rest.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
 }
 
+// ---------------------------------------------------------------- schemas
+/**
+ * THE VENDORED SCHEMAS ARE LOADED FAIL-CLOSED.
+ *
+ * Each one is a byte-identical copy of the published kernel's `docs/` (see
+ * SCHEMA-STATUS.md), and every schema-driven check below was previously written
+ * as `if (schema) validateSchema(...)` — so deleting `schemas/oas-config.schema.json`
+ * silently switched template validation OFF and the gate still printed
+ * "Validated …" and exited 0. A gate that reports success when its own rules
+ * went missing is worse than no gate: it converts a deletion into a green run.
+ *
+ * All four are therefore REQUIRED to exist and to parse, named individually so
+ * the diagnostic says which one. `oas-lock.schema.json` is not read by this
+ * script — the consumer probe validates a real generated lock against it — but
+ * it is required here too, because "the four vendored schemas are present and
+ * loadable" is a property of the repository, and the offline gate is the only
+ * thing that checks it on every push.
+ */
+const SCHEMA_FILES = {
+  package: "oas-package.schema.json",
+  capability: "capability-manifest.schema.json",
+  config: "oas-config.schema.json",
+  lock: "oas-lock.schema.json",
+};
+
+const schemas = {};
+for (const [role, name] of Object.entries(SCHEMA_FILES)) {
+  const path = join(repoRoot, "schemas", name);
+  if (!existsSync(path)) {
+    report(`schemas/${name}`, `vendored ${role} schema is MISSING — it gates ${role === "lock" ? "the lock the consumer probe checks" : `every ${role} document this repository ships`}, and a validator that silently skips a missing rule reports success for work it did not do. Restore it from the published @oas-framework/oas kernel's docs/`);
+    continue;
+  }
+  let parsed;
+  try { parsed = JSON.parse(readFileSync(path, "utf8")); }
+  catch (error) { report(`schemas/${name}`, `vendored ${role} schema is unreadable (${error.message}) — the gate refuses to run with a broken rule set rather than skip it`); continue; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    report(`schemas/${name}`, `vendored ${role} schema is not a JSON Schema object`);
+    continue;
+  }
+  schemas[role] = parsed;
+}
+
 const packagePath = join(root, "oas-package.json");
 const packageManifest = readJson(packagePath);
-const packageSchema = readJson(join(repoRoot, "schemas", "oas-package.schema.json"));
-const capabilitySchema = readJson(join(repoRoot, "schemas", "capability-manifest.schema.json"));
-const configSchemaPath = join(repoRoot, "schemas", "oas-config.schema.json");
+const packageSchema = schemas.package;
+const capabilitySchema = schemas.capability;
+const configSchema = schemas.config;
 
 if (packageManifest) refuseProtoKeys(packageManifest, "oas-package.json");
 if (packageManifest && packageSchema) validateSchema(packageManifest, packageSchema, "oas-package.json");
@@ -263,7 +293,6 @@ const templates = rawTemplates && typeof rawTemplates === "object" && !Array.isA
 const defaults = Object.entries(templates).filter(([, spec]) => spec?.default === true);
 if (defaults.length > 1) report(`oas-package.json.${templateKey}`, "at most one config template may be marked default");
 
-const configSchema = Object.keys(templates).length && existsSync(configSchemaPath) ? readJson(configSchemaPath) : undefined;
 for (const [name, spec] of Object.entries(templates)) {
   const at = `oas-package.json.${templateKey}.${name}`;
   if (!TEMPLATE_NAME.test(name)) report(at, `template name must match ${TEMPLATE_NAME} — it is the identifier an adopter passes to \`oas init --package ... --config <name>\``);
@@ -274,7 +303,17 @@ for (const [name, spec] of Object.entries(templates)) {
   }
   const real = safeResource(root, spec.path, `${at}.path`, "config template");
   if (!real) continue;
-  if (!statSync(real).isFile()) { report(`${at}.path`, `config template is not a file: ${spec.path}`); continue; }
+  // LSTAT, NOT STAT — mirroring loadPackageManifest in the released kernel,
+  // which writes `if (!lstatSync(p).isFile())`. A SYMLINK to a real file passes
+  // `statSync(realpath).isFile()` and fails `lstatSync(declared).isFile()`, so
+  // the previous spelling produced the one outcome a repo gate must never
+  // produce: gate PASS, kernel FAIL — a package that ships green from here and
+  // is refused as an invalid manifest at the adopter's `oas install`.
+  const declared = resolve(root, spec.path);
+  if (!lstatSync(declared).isFile()) {
+    report(`${at}.path`, `config template is not a file: ${spec.path}${lstatSync(declared).isSymbolicLink() ? " — it is a SYMLINK, and the released kernel lstats this path (a link is refused as an invalid package manifest even when its target is a perfectly good file)" : ""}`);
+    continue;
+  }
   const source = readFileSync(real, "utf8");
   // Parsed with the KERNEL's own semantics, so what is linted here is what an
   // adopter's deployment will actually see. A construct the kernel would drop
@@ -321,13 +360,13 @@ for (const [index, capabilityDir] of declaredCapabilities.entries()) {
   // The kernel's asymmetry is preserved deliberately: a SKILL entry may be a
   // single file (skills/foo.md) or a directory; a capability-defined AGENT is a
   // soul directory (soul.yaml + AGENTS.md) and nothing else.
-  for (const [resourceIndex, resource] of (manifest.skills || []).entries()) {
+  for (const [resourceIndex, resource] of declaredList(manifest.skills, `${capabilityDir}/oas.json.skills`, "skills").entries()) {
     const at = `${capabilityDir}/oas.json.skills[${resourceIndex}]`;
     const real = safeResource(capabilityRoot, resource, at, "skill path", capabilityRoot);
     if (real && statSync(real).isDirectory()) assertContainedTree(join(capabilityRoot, resource), at, "skill tree", capabilityRoot);
   }
   if (manifest.inject) safeResource(capabilityRoot, manifest.inject, `${capabilityDir}/oas.json.inject`, "injection path", capabilityRoot);
-  for (const [agentIndex, agent] of (manifest.agents || []).entries()) {
+  for (const [agentIndex, agent] of declaredList(manifest.agents, `${capabilityDir}/oas.json.agents`, "agents").entries()) {
     const at = `${capabilityDir}/oas.json.agents[${agentIndex}]`;
     const real = safeResource(capabilityRoot, agent, at, "agent path", capabilityRoot);
     if (real) {
@@ -342,8 +381,8 @@ for (const [index, capabilityDir] of declaredCapabilities.entries()) {
     const command = typeof spec === "string" ? spec : (spec && typeof spec === "object" ? spec.command : undefined);
     return typeof command === "string" ? command.trim().split(/\s+/)[0] : command;
   };
-  for (const [name, command] of Object.entries(manifest.commands || {})) safeResource(capabilityRoot, entrypoint(command), `${capabilityDir}/oas.json.commands.${name}`, "command entrypoint", capabilityRoot);
-  for (const [event, hook] of Object.entries(manifest.hooks || {})) safeResource(capabilityRoot, entrypoint(hook), `${capabilityDir}/oas.json.hooks.${event}`, "hook entrypoint", capabilityRoot);
+  for (const [name, command] of Object.entries(declaredMap(manifest.commands, `${capabilityDir}/oas.json.commands`, "commands"))) safeResource(capabilityRoot, entrypoint(command), `${capabilityDir}/oas.json.commands.${name}`, "command entrypoint", capabilityRoot);
+  for (const [event, hook] of Object.entries(declaredMap(manifest.hooks, `${capabilityDir}/oas.json.hooks`, "hooks"))) safeResource(capabilityRoot, entrypoint(hook), `${capabilityDir}/oas.json.hooks.${event}`, "hook entrypoint", capabilityRoot);
   for (const forbidden of ["global", "agent-types", "souls"]) if (Object.hasOwn(manifest, forbidden)) report(`${capabilityDir}/oas.json.${forbidden}`, "deployment targeting belongs to config, not a capability manifest");
 }
 
