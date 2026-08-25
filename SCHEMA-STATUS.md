@@ -54,9 +54,19 @@ The canonical shape, as the released kernel enforces it:
 
 `oas.dev@2.0.0` pins `oas.okf@v2.0.0`, `oas.aweb@v2.0.0` and
 `oas.authoring@v2.0.0` — the released sibling v2 tags, in exactly the catalog
-form the kernel parses. `scripts/catalog-selectors.mjs` remains the deterministic
-local→published mapping and accepts the exact published form, so the pre-release
-local-path spelling can never be published by accident.
+form the kernel parses.
+
+`scripts/catalog-selectors.mjs` is the **single definition of that set** and the
+assertion that the shipped manifest carries exactly it: three immutable pinned
+catalog selectors, as a set, in any order. `scripts/validate-manifests.mjs`
+imports the list from there rather than restating it, so the gate and the CI
+selector check cannot disagree about what this release pins. It guarantees
+exactly one thing, stated narrowly on purpose: **no floating ref, bare id, local
+path or unexpected entry can ship in `dependencies`.** It is not a
+local→published *mapping* — the pre-publication local form and its `--apply`
+rewrite were retired with this release, because the manifest has been in catalog
+form since v2.0.0 was cut and code describing the earlier state was dead code
+telling the next maintainer something untrue.
 
 `oas.jira` and `oas.linear` are adopter-selected task providers and are **never**
 dependencies; the validator rejects either id in `dependencies` outright, and the

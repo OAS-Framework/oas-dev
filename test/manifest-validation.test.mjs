@@ -81,7 +81,12 @@ function runFixture(t, {
   mkdirSync(join(fixture, "schemas"), { recursive: true });
   mkdirSync(join(fixture, "oas-package"), { recursive: true });
 
-  copyFileSync(join(REPO, "scripts", "validate-manifests.mjs"), join(fixture, "scripts", "validate-manifests.mjs"));
+  // catalog-selectors.mjs travels with the validator: it is the single
+  // definition of this release's pinned dependency selectors, imported rather
+  // than restated so the gate and the CI selector check cannot disagree.
+  for (const script of ["validate-manifests.mjs", "catalog-selectors.mjs"]) {
+    copyFileSync(join(REPO, "scripts", script), join(fixture, "scripts", script));
+  }
   for (const lib of ["kernel-yaml.mjs", "config-portability.mjs", "json-schema.mjs"]) {
     copyFileSync(join(REPO, "scripts", "lib", lib), join(fixture, "scripts", "lib", lib));
   }

@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { extractComments, parseKernelYaml } from "./lib/kernel-yaml.mjs";
 import { commentLeaks, valueLeaks } from "./lib/config-portability.mjs";
 import { checkSchema } from "./lib/json-schema.mjs";
+import { PUBLISHED_SELECTORS } from "./catalog-selectors.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = join(repoRoot, "oas-package");
@@ -50,16 +51,17 @@ const CAPABILITY_VERSION = "2.0.0";
 const OAS_FLOOR = ">=0.20.0";
 
 /**
- * The EXACT dependency set. Entries are package SOURCE SPECS in official
- * catalog form `<package id>@<selector>`, where the selector overrides the
- * catalog's own ref — so a v-tag here pins the acquired source immutably.
+ * The EXACT dependency set, imported from scripts/catalog-selectors.mjs so this
+ * gate and the CI selector check cannot disagree about what this release pins.
+ * Entries are package SOURCE SPECS in official catalog form
+ * `<package id>@<selector>`, where the selector overrides the catalog's own ref
+ * — so a v-tag pins the acquired source immutably.
  *
  * oas.jira and oas.linear are deliberately absent and actively refused: a task
  * layer is the ADOPTER's choice, and depending on one would drag a provider
  * into every oas.dev closure.
  */
-const REQUIRED_DEPENDENCIES = ["oas.okf@v2.0.0", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"];
-const ALLOWED_DEPENDENCY = /^oas\.(okf|aweb|authoring)@v2\.0\.0$/;
+const REQUIRED_DEPENDENCIES = [...PUBLISHED_SELECTORS];
 const ADOPTER_SELECTED = /(^|[^a-z0-9])oas[._-](jira|linear)([^a-z0-9]|$)/i;
 
 /** Template names are map keys in the manifest; the kernel's grammar for them. */
@@ -264,7 +266,7 @@ if (packageManifest) {
         report(at, `${JSON.stringify(spec)} names an adopter-selected task provider — oas.jira and oas.linear are never oas.dev dependencies, because the task layer is the adopter's choice`);
         return;
       }
-      if (!ALLOWED_DEPENDENCY.test(spec)) {
+      if (!REQUIRED_DEPENDENCIES.includes(spec)) {
         report(at, `${JSON.stringify(spec)} is not one of this release's pinned catalog selectors ${JSON.stringify(REQUIRED_DEPENDENCIES)} — a dependency must be an immutable pinned source spec, never a floating ref`);
       }
     });

@@ -23,6 +23,9 @@ jobs:
           node-version: 22
       - name: Validate manifests, config template, schemas, and README install spellings
         run: npm test
+      # The same three selectors scripts/validate-manifests.mjs imports and
+      # enforces, asserted on their own so a manifest that drifts to a floating
+      # ref, a bare id or a local path is reported as exactly that.
       - name: Dependency selectors are the published immutable catalog form
         run: node scripts/catalog-selectors.mjs --check
 
@@ -40,6 +43,14 @@ jobs:
     # a PROFILE package whose value is a dependency closure. They are checked
     # out beside this repository and served to the kernel as local `file://`
     # bare clones, so the probe itself stays hermetic.
+    #
+    # VISIBILITY ASSUMPTION: all five sibling repositories (OAS-Framework/oas-okf,
+    # -aweb, -authoring, -jira, -linear) are PUBLIC, verified at the time this
+    # job was written, so the five checkout steps below need no `token:` — the
+    # default GITHUB_TOKEN is scoped to this repository only and cannot read a
+    # private sibling. If any of them is ever made private, each of those steps
+    # needs `token: ${{ secrets.<PAT> }}` with read access to it, or the job
+    # fails at checkout rather than in the probe.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

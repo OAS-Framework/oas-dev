@@ -4,11 +4,9 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
-  PUBLISHED_FORM,
-  SELECTOR_MAP,
-  applyCatalogForm,
-  catalogSelectors,
-  checkPublishedForm,
+  PUBLISHED_SELECTORS,
+  RELEASE_TAG,
+  publishedSelectorProblems,
 } from "../scripts/catalog-selectors.mjs";
 
 const REPO = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -65,32 +63,46 @@ test("the package ships exactly one canonical, default config TEMPLATE", () => {
   assert.ok(!pkg.capabilities.includes("."));
 });
 
-test("dependencies use the immutable published catalog-selector form", () => {
-  const { deps, selectors } = checkPublishedForm();
-  assert.deepEqual(deps, PUBLISHED_FORM);
+test("dependencies are exactly this release's immutable published selectors", () => {
+  const deps = JSON.parse(readFileSync(join(ROOT, "oas-package.json"), "utf8")).dependencies;
+  assert.deepEqual(publishedSelectorProblems(), [], "the shipped manifest must be in published form");
+  assert.deepEqual([...PUBLISHED_SELECTORS].sort(), [...deps].sort());
   assert.deepEqual(deps, ["oas.okf@v2.0.0", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"]);
-  assert.deepEqual(selectors, deps);
+  for (const spec of PUBLISHED_SELECTORS) {
+    // A selector is a Git REF, not a semver range: `oas.okf@2.0.0` parses and
+    // then fails to resolve, because the tag is v2.0.0.
+    assert.match(spec, /^oas\.[a-z]+@v\d+\.\d+\.\d+$/);
+    assert.ok(spec.endsWith(`@${RELEASE_TAG}`), `${spec} must pin ${RELEASE_TAG}`);
+  }
+  // Jira/Linear are adopter-selected, never oas.dev dependencies.
+  const ids = PUBLISHED_SELECTORS.map((s) => s.split("@")[0]).sort();
+  assert.deepEqual(ids, ["oas.authoring", "oas.aweb", "oas.okf"]);
 });
 
-test("catalog-selector replacement is deterministic (not a TODO)", () => {
-  // The publication swap is fully specified by scripts/catalog-selectors.mjs:
-  // each local path -> catalog id, version read from the sibling release.
-  const selectors = catalogSelectors({ verifySibling: false });
-  const byId = Object.fromEntries(selectors.map((s) => [s.split("@")[0], s.split("@")[1]]));
-  assert.deepEqual(Object.keys(byId).sort(), ["oas.authoring", "oas.aweb", "oas.okf"]);
-  for (const s of selectors) assert.match(s, /^oas\.[a-z]+@v\d+\.\d+\.\d+$/);
-  // Jira/Linear are adopter-selected, never oas.dev dependencies.
-  assert.deepEqual(SELECTOR_MAP.map((e) => e.catalog).sort(), ["oas.authoring", "oas.aweb", "oas.okf"]);
-  // Applying the gate (dry run) yields exactly those catalog selectors and drops
-  // the local form; identity/version/profile are untouched.
-  const { selectors: applied, text } = applyCatalogForm({ write: false });
-  assert.deepEqual(applied, selectors);
-  const rewritten = JSON.parse(text);
-  assert.deepEqual(rewritten.dependencies, selectors);
-  assert.equal(rewritten.package, "oas.dev");
-  assert.equal(rewritten.version, "2.0.0");
-  // The swap touches dependencies only: the template descriptor is untouched.
-  assert.equal(rewritten.configTemplates.default.path, TEMPLATE_PATH);
+for (const [label, deps] of [
+  ["a floating catalog ref", ["oas.okf@main", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"]],
+  ["a semver-looking selector with no v", ["oas.okf@2.0.0", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"]],
+  ["a bare id with no selector", ["oas.okf", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"]],
+  ["a pre-publication local path", ["../../oas-okf/oas-package", "oas.aweb@v2.0.0", "oas.authoring@v2.0.0"]],
+  ["a missing dependency", ["oas.okf@v2.0.0", "oas.aweb@v2.0.0"]],
+  ["an adopter-selected task provider", [...PUBLISHED_SELECTORS, "oas.jira@v2.0.0"]],
+  ["a repeated selector", [...PUBLISHED_SELECTORS, "oas.okf@v2.0.0"]],
+]) {
+  test(`the selector assertion rejects ${label}`, () => {
+    // The rule is proved on synthetic manifests rather than only on the shipped
+    // one: a check that has only ever seen a passing input is indistinguishable
+    // from a check that always passes.
+    const problems = publishedSelectorProblems({ manifest: { dependencies: deps } });
+    assert.ok(problems.length, `MUST be rejected — ${label}: ${JSON.stringify(deps)}`);
+  });
+}
+
+test("the selector assertion treats ORDER as meaningless", () => {
+  // The kernel records dependencies as sorted package ids in the lock, so
+  // ordering here carries no meaning and must not be something a reviewer has
+  // to check.
+  const shuffled = [...PUBLISHED_SELECTORS].reverse();
+  assert.deepEqual(publishedSelectorProblems({ manifest: { dependencies: shuffled } }), []);
 });
 
 test("default profile is generic OAS development policy", () => {
