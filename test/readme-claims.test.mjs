@@ -69,6 +69,18 @@ const CHANGED = "## What changed in 2.0.0";
  */
 const EXECUTABLE_DEPENDENCIES = ["oas.okf", "oas.aweb"];
 
+/**
+ * The closure's capabilities that have NO executable surface, and so must be
+ * enumerated as needing nothing rather than omitted.
+ *
+ * `oas.authoring@v2.0.0`'s manifest declares three skills and neither
+ * `commands` nor `hooks` — checked against the artifact by the probe, which
+ * measures every locked capability rather than a list. It used to be missing
+ * from the table entirely, which left a reader unable to tell "exempt" from
+ * "forgotten" for a quarter of the closure.
+ */
+const INERT_CAPABILITIES = ["oas.review", "oas.authoring"];
+
 test("the trust posture enumerates BOTH executable dependencies, each needing its own trust", () => {
   const trust = section(TRUST);
   for (const id of EXECUTABLE_DEPENDENCIES) {
@@ -96,6 +108,38 @@ test("the trust posture no longer claims the workspace has nothing to trust", ()
   const trust = section(TRUST);
   assert.doesNotMatch(trust, /Trust posture: there is nothing to trust/,
     "the closure has two executable capabilities; only oas.review has nothing to trust");
+});
+
+test("the trust posture enumerates the WHOLE closure, exempt capabilities included", () => {
+  // Four capabilities are locked; the table listed three. An enumeration that
+  // silently drops the members with nothing to approve is the one a reader
+  // cannot act on, because "absent" and "needs no approval" look identical.
+  const trust = section(TRUST);
+  const locked = ["oas.review", ...PACKAGE.dependencies.map((dep) => dep.split("@")[0])];
+  for (const id of locked) {
+    assert.ok(trust.includes(id),
+      `the trust posture never mentions ${id}, which is in this package's own closure`);
+  }
+  for (const id of INERT_CAPABILITIES) {
+    assert.ok(!new RegExp(`oas trust ${id.replace(".", "\\.")}`).test(trust),
+      `${id} has no executable surface, so the README must not tell a reader to run \`oas trust ${id}\``);
+  }
+  assert.match(trust, /oas\.authoring[^|]*\|\s*none/,
+    "oas.authoring's row must say its executable surface is none");
+});
+
+test("the trust posture does not overstate oas.aweb's REQUIRED hooks", () => {
+  // Measured against the artifact by the probe; pinned here because the claim is
+  // specific and cheap to get wrong. In oas.aweb@v2.0.0's manifest only `spawn`
+  // carries `"required": true` — `retire` is a plain string entry. The README
+  // said "required `spawn` / `retire` hooks", which invents a contract.
+  const trust = section(TRUST);
+  assert.doesNotMatch(trust, /required\s*`?spawn`?\s*\/\s*`?retire`?\s*hooks/i,
+    "only spawn is required:true at v2.0.0; retire is an ordinary hook entry");
+  assert.match(trust, /required\*{0,2}\s*`spawn`\s*hook/,
+    "the README must say which of oas.aweb's hooks is the required one");
+  assert.match(trust, /optional\s*`retire`\s*hook/,
+    "…and that retire is not");
 });
 
 test("the trust posture is truthful about oas.review having no executable surface", () => {

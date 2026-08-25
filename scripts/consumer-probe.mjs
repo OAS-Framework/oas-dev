@@ -971,34 +971,69 @@ check("oas.review declares NO executable surface, and trust says exactly that", 
   deepEqual(trust.result.executableSurface["oas.review"], { commands: [], hooks: [] }, "the reported surface is empty");
   equal(lockOf(profile).capabilities["oas.review"].trusted, false, "the lock's trusted flag stays false for a hook-less capability");
   const human = oas(["trust", "oas.review", "--dir", profile]).text;
-  assert(/No executable surface \(artifact integrity suffices, no approval needed\): oas\.review/.test(human),
+  const NO_SURFACE_LINE = "No executable surface (artifact integrity suffices, no approval needed): oas.review";
+  assert(human.includes(NO_SURFACE_LINE),
     `human output must say plainly that no approval was needed:\n${human}`);
+  // The README QUOTES that line. A paraphrase inside backticks reads as program
+  // output and is a lie about it — the previous README quoted a truncated,
+  // lower-cased "no executable surface (artifact integrity suffices)", which a
+  // reader matching against their terminal would not find. Only the kernel knows
+  // its own text, so this half cannot live in the offline suite.
+  assert(README_TEXT.includes(`\`${NO_SURFACE_LINE}\``),
+    "the README quotes `oas trust`'s no-surface line; it must be the kernel's own text, character for character.\n" +
+    `  kernel: ${JSON.stringify(NO_SURFACE_LINE)}`);
   // And it is still USABLE: doctor reports no trust problem for it.
   const pkg = oasJson(["doctor", profile]).packages.find((p) => p.id === "oas.dev");
   deepEqual((pkg.problems || []).map((p) => p.code), [], `oas.dev must have no trust problem: ${JSON.stringify(pkg.problems)}`);
   return "approved [], skipped [oas.review], surface {commands:[],hooks:[]}, lock.trusted stays false";
 });
 
+/** Every locked capability's executable surface, as the kernel reported it. */
 const executableSurfaces = {};
-check("the executable dependencies ARE gated, and `oas trust` binds each to its artifact", () => {
-  // Non-vacuity for the check above: in the same lock, two capabilities DO have
-  // executable surfaces, and their approvals behave completely differently.
-  for (const id of ["oas.okf", "oas.aweb"]) {
-    equal(lockOf(profile).capabilities[id].trusted, false, `${id} must be untrusted before approval`);
-    const integrity = lockOf(profile).capabilities[id].integrity;
+check("EVERY capability in the lock is trusted according to its OWN surface", () => {
+  // DERIVED, NOT LISTED. This check used to iterate a hard-coded
+  // ["oas.okf", "oas.aweb"], which is the one thing it must not do: the closure
+  // is what the lock says it is, and a dependency added, dropped or newly
+  // grown an executable surface would leave the pair silently describing the
+  // previous release. So the set comes out of the generated lock, and set
+  // equality with the closure this package claims is asserted first — a new
+  // capability fails here rather than going unexamined.
+  const locked = Object.keys(lockOf(profile).capabilities).sort();
+  deepEqual(locked, EXPECTED_CAPABILITIES, "the lock's capability set is what the closure claims");
+
+  const gated = [], inert = [];
+  for (const id of locked) {
+    const before = lockOf(profile).capabilities[id];
     const trust = oasJson(["trust", id, "--dir", profile]);
     assert(trust.ok, `trust ${id} failed: ${JSON.stringify(trust.error)}`);
-    deepEqual(trust.result.approved, [id], `${id} must be approved`);
-    equal(trust.result.approvedIntegrity[id], integrity, `${id} approval must bind to the MATERIALIZED artifact integrity`);
-    assert(trust.result.executableSurface[id].hooks.includes("spawn"), `${id} declares a spawn hook`);
-    equal(lockOf(profile).capabilities[id].trusted, true, `${id} trust is recorded in the lock`);
-    executableSurfaces[id] = trust.result.executableSurface[id];
+    const surface = trust.result.executableSurface[id];
+    assert(surface, `trust ${id} reported no executable surface at all: ${JSON.stringify(trust.result)}`);
+    executableSurfaces[id] = surface;
+
+    // The OUTCOME follows from the measured surface, never from the id.
+    const hasSurface = surface.commands.length > 0 || surface.hooks.length > 0;
+    (hasSurface ? gated : inert).push(id);
+    if (hasSurface) {
+      equal(before.trusted, false, `${id} must be untrusted before approval`);
+      deepEqual(trust.result.approved, [id], `${id} must be approved`);
+      equal(trust.result.approvedIntegrity[id], before.integrity,
+        `${id} approval must bind to the MATERIALIZED artifact integrity`);
+      equal(lockOf(profile).capabilities[id].trusted, true, `${id} trust is recorded in the lock`);
+    } else {
+      deepEqual(trust.result.approved, [], `${id} has no executable surface — nothing may be approved`);
+      deepEqual(trust.result.skipped, [id], `${id} must be reported as skipped`);
+      deepEqual(surface, { commands: [], hooks: [] }, `${id}'s reported surface must be empty`);
+      equal(lockOf(profile).capabilities[id].trusted, false, `${id}'s trusted flag must stay false`);
+    }
   }
+  // Both directions have to be populated, or the loop proves only one rule.
+  assert(gated.length >= 2 && inert.length >= 1,
+    `this check needs capabilities on BOTH sides: ${JSON.stringify(executableSurfaces)}`);
   // oas.okf's surface is the one a reader is most likely to assume the package
   // covers, because the OKF protocol's own harvest step runs through it.
   assert(executableSurfaces["oas.okf"].commands.includes("harvest"),
     `oas.okf must expose the harvest command: ${JSON.stringify(executableSurfaces["oas.okf"])}`);
-  return "oas.okf and oas.aweb approved at their artifact integrity; oas.review needed no approval";
+  return `gated: ${gated.join(", ")}; no surface: ${inert.join(", ")}`;
 });
 
 check("the README's trust posture names EVERY capability this run had to trust", () => {
@@ -1018,16 +1053,28 @@ check("the README's trust posture names EVERY capability this run had to trust",
   const trust = section("## Acquire or activate review independently");
   const gated = Object.entries(executableSurfaces)
     .filter(([, surface]) => surface.commands.length || surface.hooks.length)
-    .map(([id]) => id);
-  assert(gated.length >= 2, `this check is only meaningful if the run gated something: ${JSON.stringify(executableSurfaces)}`);
-  for (const id of gated) {
-    assert(trust.includes(`oas trust ${id}`),
-      `the README's trust posture never tells a reader to run \`oas trust ${id}\`, but this run had to: ` +
-      `${id} declares commands ${JSON.stringify(executableSurfaces[id].commands)} and hooks ${JSON.stringify(executableSurfaces[id].hooks)}`);
+    .map(([id]) => id).sort();
+  const inert = Object.keys(executableSurfaces).filter((id) => !gated.includes(id)).sort();
+  assert(gated.length >= 2 && inert.length >= 1,
+    `this check is only meaningful if the run gated something and exempted something: ${JSON.stringify(executableSurfaces)}`);
+
+  // SET EQUALITY, not one-way containment. Containment alone leaves the document
+  // free to demand an approval the kernel never asks for — which is how a reader
+  // learns to run trust commands that do nothing and to stop reading this table.
+  const documented = [...new Set(
+    [...trust.matchAll(/oas trust ([a-z0-9][a-z0-9._-]*)/g)].map((m) => m[1]),
+  )].sort();
+  deepEqual(documented, gated,
+    "the README's trust posture must tell a reader to run `oas trust <id>` for EXACTLY the capabilities this run " +
+    `had to approve.\n  measured surfaces: ${JSON.stringify(executableSurfaces)}`);
+
+  // …and every capability with NO surface must still be named, or a reader
+  // cannot tell "exempt" from "forgotten".
+  for (const id of inert) {
+    assert(trust.includes(id), `the trust posture never mentions ${id}, which the run found to have no executable surface`);
   }
-  // …and it must still be truthful about the capability that needs nothing.
-  assert(/no executable surface/i.test(trust), "the README must keep saying oas.review needs no approval");
-  return `README documents \`oas trust\` for ${gated.join(" and ")}`;
+  assert(/no executable surface/i.test(trust), "the README must keep saying which capabilities need no approval");
+  return `README documents \`oas trust\` for exactly ${gated.join(" and ")}; ${inert.join(", ")} named as needing none`;
 });
 
 // ───────────────────────────────────────────────── agent types and nesting

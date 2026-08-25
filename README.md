@@ -206,11 +206,16 @@ oas doctor /path/to/scope --soul some-developer-soul
 that do.** Trust in OAS is per capability, never per package, so the closure's
 executable surface has to be enumerated capability by capability:
 
+All four capabilities the closure locks are listed, including the ones with
+nothing to approve — an enumeration that skipped them would leave a reader
+unsure whether they were forgotten or exempt.
+
 | Capability | Executable surface | `oas trust` |
 | --- | --- | --- |
-| `oas.review` | none — an agent definition, two skills, one instruction injection | approves nothing; reports *no executable surface (artifact integrity suffices)* |
+| `oas.review` | none — an agent definition, two skills, one instruction injection | approves nothing; prints `No executable surface (artifact integrity suffices, no approval needed): oas.review` |
+| `oas.authoring` | none — three authoring skills, no `commands` and no `hooks` in its v2.0.0 manifest | approves nothing, for the same reason |
 | `oas.okf` | command namespace `okf` with the `harvest` command, plus the `soul-scaffold` and `spawn` lifecycle hooks | **required** — `oas trust oas.okf` |
-| `oas.aweb` | the `aweb` command namespace (`roster`, `setup`), the `aw` dispatch its skills drive, and required `spawn` / `retire` hooks | **required** — `oas trust oas.aweb` |
+| `oas.aweb` | the `aweb` command namespace (`roster`, `setup`), the `aw` dispatch its skills drive, a **required** `spawn` hook and an optional `retire` hook | **required** — `oas trust oas.aweb` |
 
 So a workspace built from this template needs **two** approvals, one per
 executable dependency, and each binds to *that capability's own materialized
@@ -218,20 +223,29 @@ artifact integrity* — re-materializing one resets only its own approval. Neith
 is inherited from the other, and neither is granted by trusting `oas.dev`: there
 is no package-level approval to grant.
 
+(In `oas.aweb`'s manifest only `spawn` carries `"required": true`; `retire` is a
+plain hook entry. Both are part of the executable surface `oas trust oas.aweb`
+approves — the distinction is whether the kernel treats a failing hook as fatal,
+not whether it needs approval.)
+
 This is not a formality for the knowledge layer. The OKF protocol these agents
 run under ends every commit with `oas okf harvest`, and that command is part of
 `oas.okf`'s executable surface: **until `oas trust oas.okf` is given, the harvest
 step cannot run and notes never reach the soul.**
 
-`oas.review` remains the exception rather than the rule: it declares no
-`commands` and no `hooks`, so `oas trust oas.review` reports that plainly instead
-of granting anything, and the lock's `trusted` flag for it stays `false` with no
-loss of function. The reviewer delivers its verdict over whatever messaging layer
-the deployment configures — this package configures none of its own.
+`oas.review` and `oas.authoring` declare no `commands` and no `hooks`, so
+`oas trust <id>` reports that plainly instead of granting anything, and the
+lock's `trusted` flag for each stays `false` with no loss of function. The
+reviewer delivers its verdict over whatever messaging layer the deployment
+configures — this package configures none of its own.
 
-Probe check 7 proves all three outcomes against the released kernel in one run:
-`oas.review` approved `[]` / skipped, and `oas.okf` and `oas.aweb` each approved
-at their own artifact integrity.
+Probe check 7 proves every outcome against the released kernel in one run, over
+the capability set read out of the **generated lock** rather than a list written
+here: each capability's surface is measured with `oas trust`, the ones with a
+surface must end up approved and `trusted: true`, the ones without must be
+skipped and stay `false`, and this table must document `oas trust <id>` for
+exactly the first group — so a dependency change that alters the closure's
+executable surface fails the probe instead of quietly outdating this page.
 
 ## Development
 
